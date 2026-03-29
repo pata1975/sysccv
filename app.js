@@ -33,6 +33,7 @@ async function syncMlEntryToTN(entry) {
     return;
   }
 
+  console.log('[ML -> TN] Buscando SKU en Tiendanube:', JSON.stringify(String(entry.sku).trim()));
   const tnVariant = await tnService.getTNVariantBySKU(entry.sku);
   if (!tnVariant) {
     console.warn(`[ML -> TN] SKU ${entry.sku} no encontrado en Tiendanube.`);
@@ -58,6 +59,7 @@ async function syncTnVariantToML(variant) {
     return;
   }
 
+  console.log('[TN -> ML] Buscando SKU en Mercado Libre:', JSON.stringify(sku));
   const mlMatch = await mlService.findMLPublicationBySKU(sku);
   if (!mlMatch) {
     console.warn(`[TN -> ML] SKU ${sku} no encontrado en Mercado Libre.`);

@@ -456,14 +456,26 @@ async function findMLPublicationBySKU(rawSku) {
   const sku = cleanSku(rawSku);
   if (!sku) return null;
 
+  console.log('[ML lookup] buscando SKU exacto:', JSON.stringify(sku));
   const searches = [{ seller_sku: sku }, { sku }];
+  const tried = [];
 
   for (const params of searches) {
     const itemIds = await searchItemIdsByParams(params).catch((error) => {
       if (error?.code === 'ML_REAUTH_REQUIRED') throw error;
       return [];
     });
-    if (!itemIds.length) continue;
+
+    console.log('[ML lookup] items/search resultado.', {
+      params,
+      itemIdsCount: itemIds.length,
+      firstItemIds: itemIds.slice(0, 10),
+    });
+
+    if (!itemIds.length) {
+      tried.push({ params, itemIdsCount: 0, sampleSkus: [] });
+      continue;
+    }
 
     const rows = await multigetItemsByIds(
       itemIds,
@@ -473,14 +485,33 @@ async function findMLPublicationBySKU(rawSku) {
       return [];
     });
 
+    const sampleSkus = [];
+
     for (const row of rows) {
       if (row?.code !== 200 || !row?.body) continue;
       const entries = mapItemToEntries(row.body);
+      for (const entry of entries) {
+        if (entry?.sku) sampleSkus.push(entry.sku);
+      }
       const match = entries.find((entry) => entry.sku === sku);
-      if (match) return match;
+      if (match) {
+        console.log('[ML lookup] match exacto en Mercado Libre.', {
+          sku,
+          itemId: match.itemId,
+          variationId: match.variationId,
+          stock: match.stock,
+        });
+        return match;
+      }
     }
+
+    tried.push({ params, itemIdsCount: itemIds.length, sampleSkus: sampleSkus.slice(0, 25) });
   }
 
+  console.warn('[ML lookup] sin match exacto en Mercado Libre.', {
+    sku,
+    tried,
+  });
   return null;
 }
 
