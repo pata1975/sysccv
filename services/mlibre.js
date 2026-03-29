@@ -477,6 +477,35 @@ async function findMLPublicationBySKU(rawSku) {
       continue;
     }
 
+    if (params.seller_sku && itemIds.length === 1) {
+      const directMatch = await executeRequest(itemIds[0]).catch((error) => {
+        if (error?.code === 'ML_REAUTH_REQUIRED') throw error;
+        return null;
+      });
+
+      if (directMatch) {
+        console.log('[ML lookup] match directo por seller_sku con único candidato.', {
+          sku,
+          itemId: directMatch.itemId,
+          variationId: directMatch.variationId,
+          stock: directMatch.stock,
+        });
+        return directMatch;
+      }
+
+      console.warn('[ML lookup] seller_sku devolvió un único itemId, pero no se pudo reconstruir el SKU desde el detalle. Se usa igual el item como fallback.', {
+        sku,
+        itemId: itemIds[0],
+      });
+
+      return {
+        sku,
+        itemId: itemIds[0],
+        variationId: null,
+        stock: 0,
+      };
+    }
+
     const rows = await multigetItemsByIds(
       itemIds,
       'id,user_product_id,available_quantity,seller_custom_field,attributes,variations'
@@ -503,6 +532,32 @@ async function findMLPublicationBySKU(rawSku) {
         });
         return match;
       }
+    }
+
+    if (itemIds.length === 1) {
+      console.warn('[ML lookup] un solo candidato en Mercado Libre; se usa como fallback aunque no haya match exacto por parsing.', {
+        sku,
+        itemId: itemIds[0],
+      });
+
+      const fallbackMatch = await executeRequest(itemIds[0]).catch((error) => {
+        if (error?.code === 'ML_REAUTH_REQUIRED') throw error;
+        return null;
+      });
+
+      if (fallbackMatch) {
+        return {
+          ...fallbackMatch,
+          sku,
+        };
+      }
+
+      return {
+        sku,
+        itemId: itemIds[0],
+        variationId: null,
+        stock: 0,
+      };
     }
 
     tried.push({ params, itemIdsCount: itemIds.length, sampleSkus: sampleSkus.slice(0, 25) });
