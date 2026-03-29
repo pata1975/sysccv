@@ -354,6 +354,31 @@ async function getItemIdsByUserProductId(userProductId) {
   return [];
 }
 
+
+function resolveUserProductIdFromItem(item, targetSku = null) {
+  if (!item || typeof item !== 'object') return null;
+
+  if (item.user_product_id) return item.user_product_id;
+
+  const cleanTarget = cleanSku(targetSku);
+  const variations = Array.isArray(item.variations) ? item.variations : [];
+
+  if (cleanTarget && variations.length) {
+    for (const variation of variations) {
+      const variationSku = extractSkuFromAnyKnownShape(variation);
+      if (variationSku && variationSku === cleanTarget && variation.user_product_id) {
+        return variation.user_product_id;
+      }
+    }
+  }
+
+  for (const variation of variations) {
+    if (variation?.user_product_id) return variation.user_product_id;
+  }
+
+  return null;
+}
+
 function mapItemToEntries(item) {
   const baseUserProductId = item?.user_product_id || null;
   const itemLevelSku = extractSkuFromAnyKnownShape(item);
@@ -681,7 +706,23 @@ async function updateMLStockViaNewModel(target, newStock) {
     }
 
     if (!userProductId) {
-      userProductId = item?.user_product_id || null;
+      userProductId = resolveUserProductIdFromItem(item, target?.sku || null);
+    }
+
+    if (!userProductId && item?.id) {
+      console.error('[ML stock] No se pudo determinar user_product_id desde /items.', {
+        itemId: item.id,
+        targetSku: target?.sku || null,
+        hasRootUserProductId: !!item?.user_product_id,
+        variationsCount: Array.isArray(item?.variations) ? item.variations.length : 0,
+        variationHints: Array.isArray(item?.variations)
+          ? item.variations.slice(0, 20).map((variation) => ({
+              id: variation?.id || null,
+              sku: extractSkuFromAnyKnownShape(variation),
+              user_product_id: variation?.user_product_id || null,
+            }))
+          : [],
+      });
     }
   }
 
