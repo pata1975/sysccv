@@ -1,13 +1,5 @@
 require('dotenv').config();
 
-process.on('uncaughtException', (err) => {
-  console.error('[FATAL uncaughtException]', err);
-});
-
-process.on('unhandledRejection', (reason) => {
-  console.error('[FATAL unhandledRejection]', reason);
-});
-
 const express = require('express');
 const mlService = require('./services/mlibre');
 const tnService = require('./services/tnube');
@@ -27,16 +19,32 @@ function normalizeStock(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function extractMlIdFromResource(resource) {
+  if (!resource || typeof resource !== 'string') return null;
+  const parts = resource.split('/').filter(Boolean);
+  if (!parts.length) return null;
+
+  const itemIdx = parts.findIndex((p) => p === 'items');
+  if (itemIdx >= 0 && parts[itemIdx + 1]) return parts[itemIdx + 1];
+
+  const upIdx = parts.findIndex((p) => p === 'user-products');
+  if (upIdx >= 0 && parts[upIdx + 1]) return parts[upIdx + 1];
+
+  return null;
+}
+
 async function syncMlEntryToTN(entry) {
   if (!entry?.sku) {
     console.warn('[ML -> TN] Entrada sin SKU. Se omite.', entry);
     return;
   }
 
-  console.log('[ML -> TN] Buscando SKU en Tiendanube:', JSON.stringify(String(entry.sku).trim()));
-  const tnVariant = await tnService.getTNVariantBySKU(entry.sku);
+  const cleanSku = String(entry.sku).trim();
+  console.log(`[ML -> TN] Buscando SKU en Tiendanube: ${JSON.stringify(cleanSku)}`);
+
+  const tnVariant = await tnService.getTNVariantBySKU(cleanSku);
   if (!tnVariant) {
-    console.warn(`[ML -> TN] SKU ${entry.sku} no encontrado en Tiendanube.`);
+    console.warn(`[ML -> TN] SKU ${cleanSku} no encontrado en Tiendanube.`);
     return;
   }
 
@@ -44,37 +52,55 @@ async function syncMlEntryToTN(entry) {
   const tnStock = normalizeStock(tnVariant.stock);
 
   if (mlStock === tnStock) {
-    console.log(`[ML -> TN] SKU ${entry.sku} ya está sincronizado en ${mlStock}.`);
+    console.log(`[ML -> TN] SKU ${cleanSku} ya está sincronizado en ${mlStock}.`);
     return;
   }
 
   await tnService.updateTNVariantStock(tnVariant.product_id, tnVariant.variant_id, mlStock);
-  console.log(`[ML -> TN] SKU ${entry.sku} sincronizado ${tnStock} -> ${mlStock}.`);
+  console.log(`[ML -> TN] SKU ${cleanSku} sincronizado ${tnStock} -> ${mlStock}.`);
 }
 
 async function syncTnVariantToML(variant) {
   const sku = variant?.sku ? String(variant.sku).trim() : null;
-  if (!sku) {
-    console.warn('[TN -> ML] Variante sin SKU. Se omite.', variant);
-    return;
-  }
+  console.log('[TN -> ML] variante recibida:', variant);
+  console.log('[TN -> ML] sku normalizado:', sku);
 
-  console.log('[TN -> ML] Buscando SKU en Mercado Libre:', JSON.stringify(sku));
-  const mlMatch = await mlService.findMLPublicationBySKU(sku);
-  if (!mlMatch) {
-    console.warn(`[TN -> ML] SKU ${sku} no encontrado en Mercado Libre.`);
+  if (!sku) {
+    console.warn('[TN -> ML] variante sin SKU, se omite');
     return;
   }
 
   const tnStock = normalizeStock(variant.stock);
-  const mlStock = normalizeStock(mlMatch.stock);
+  console.log('[TN -> ML] stock Tiendanube:', tnStock);
+  console.log(`[TN -> ML] Buscando SKU en Mercado Libre: ${JSON.stringify(sku)}`);
+
+  const mlItemId = await mlService.findMLItemBySKU(sku, process.env.ML_ACCESS_TOKEN);
+  console.log('[TN -> ML] resultado búsqueda ML:', mlItemId);
+
+  if (!mlItemId) {
+    console.warn(`[TN -> ML] SKU ${sku} no encontrado en Mercado Libre.`);
+    return;
+  }
+
+  const mlData = await mlService.executeRequest(mlItemId, process.env.ML_ACCESS_TOKEN);
+  console.log('[TN -> ML] detalle item ML:', mlData);
+
+  const mlStock = normalizeStock(mlData?.stock);
+  console.log('[TN -> ML] comparación stocks:', { sku, tnStock, mlStock, mlItemId });
 
   if (tnStock === mlStock) {
     console.log(`[TN -> ML] SKU ${sku} ya está sincronizado en ${tnStock}.`);
     return;
   }
 
-  await mlService.updateMLStock(mlMatch, tnStock);
+  const updated = await mlService.updateMLStock(mlItemId, tnStock, process.env.ML_ACCESS_TOKEN);
+  console.log('[TN -> ML] resultado updateMLStock:', updated);
+
+  if (!updated) {
+    console.warn(`[TN -> ML] La actualización de SKU ${sku} no fue confirmada por Mercado Libre.`);
+    return;
+  }
+
   console.log(`[TN -> ML] SKU ${sku} sincronizado ${mlStock} -> ${tnStock}.`);
 }
 
@@ -90,20 +116,24 @@ app.post('/webhooks/ml', async (req, res) => {
   const topic = req.body?.topic || req.query?.topic || req.body?.type;
 
   if (!resource || !['items', 'stock-locations', 'user-products'].includes(topic)) {
-    console.log('[ML webhook] Evento ignorado:', { resource, topic });
+    console.log('[ML webhook] Evento ignorado:', { topic, resource });
     return;
   }
 
   try {
-    const entries = await mlService.getStockEntriesFromResource(resource);
-    if (!entries.length) {
-      console.warn(`[ML webhook] No se pudieron resolver SKU/stock para ${resource}.`);
+    const mlId = extractMlIdFromResource(resource);
+    if (!mlId) {
+      console.warn('[ML webhook] No se pudo extraer id desde resource.', { resource, topic });
       return;
     }
 
-    for (const entry of entries) {
-      await syncMlEntryToTN(entry);
+    const entry = await mlService.getMLData(mlId);
+    if (!entry?.sku) {
+      console.warn(`[ML webhook] No se pudieron resolver SKU/stock para ${resource}.`, entry);
+      return;
     }
+
+    await syncMlEntryToTN(entry);
   } catch (error) {
     console.error('[ML webhook] Error:', error.response?.data || error.message || error);
   }
@@ -112,19 +142,23 @@ app.post('/webhooks/ml', async (req, res) => {
 app.post('/webhooks/tn', async (req, res) => {
   console.log('[TN webhook] entró');
   console.log('[TN webhook] content-type:', req.headers['content-type']);
-  console.log('[TN webhook] query:', req.query);
   console.log('[TN webhook] body:', req.body);
 
   res.sendStatus(200);
 
-  const productId = req.body?.id || req.query?.id;
+  const productId = req.body?.id;
+  const event = req.body?.event;
+
   if (!productId) {
-    console.warn('[TN webhook] ignorado por falta de id.');
+    console.warn('[TN webhook] sin productId, se ignora');
     return;
   }
 
+  console.log(`[TN webhook] event=${event} productId=${productId}`);
+
   try {
     const variants = await tnService.getTNProductById(productId);
+    console.log('[TN lookup] Producto ' + productId + ' -> variantes leídas:', variants);
 
     if (!Array.isArray(variants) || !variants.length) {
       console.warn(`[TN webhook] Producto ${productId} sin variantes.`);
@@ -132,10 +166,20 @@ app.post('/webhooks/tn', async (req, res) => {
     }
 
     for (const variant of variants) {
-      await syncTnVariantToML(variant);
+      console.log('[TN webhook] procesando variante:', variant);
+
+      try {
+        await syncTnVariantToML(variant);
+        console.log('[TN webhook] variante procesada OK:', variant?.sku);
+      } catch (err) {
+        console.error('[TN webhook] error procesando variante:', {
+          sku: variant?.sku,
+          error: err?.response?.data || err?.message || err,
+        });
+      }
     }
   } catch (error) {
-    console.error('[TN webhook] Error:', error.response?.data || error.message || error);
+    console.error('[TN webhook] Error general:', error.response?.data || error.message || error);
   }
 });
 
