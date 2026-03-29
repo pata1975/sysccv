@@ -1,5 +1,13 @@
 require('dotenv').config();
 
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL uncaughtException]', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL unhandledRejection]', reason);
+});
+
 const express = require('express');
 const mlService = require('./services/mlibre');
 const tnService = require('./services/tnube');
@@ -80,7 +88,7 @@ app.post('/webhooks/ml', async (req, res) => {
   const topic = req.body?.topic || req.query?.topic || req.body?.type;
 
   if (!resource || !['items', 'stock-locations', 'user-products'].includes(topic)) {
-    console.warn('[ML webhook] ignorado por payload/topic.', { resource, topic });
+    console.log('[ML webhook] Evento ignorado:', { resource, topic });
     return;
   }
 
@@ -95,18 +103,23 @@ app.post('/webhooks/ml', async (req, res) => {
       await syncMlEntryToTN(entry);
     }
   } catch (error) {
-    console.error('[ML webhook] Error:', error.response?.data || error.message);
+    console.error('[ML webhook] Error:', error.response?.data || error.message || error);
   }
 });
 
 app.post('/webhooks/tn', async (req, res) => {
   console.log('[TN webhook] entró');
+  console.log('[TN webhook] content-type:', req.headers['content-type']);
+  console.log('[TN webhook] query:', req.query);
   console.log('[TN webhook] body:', req.body);
 
   res.sendStatus(200);
 
-  const productId = req.body?.id;
-  if (!productId) return;
+  const productId = req.body?.id || req.query?.id;
+  if (!productId) {
+    console.warn('[TN webhook] ignorado por falta de id.');
+    return;
+  }
 
   try {
     const variants = await tnService.getTNProductById(productId);
@@ -120,7 +133,7 @@ app.post('/webhooks/tn', async (req, res) => {
       await syncTnVariantToML(variant);
     }
   } catch (error) {
-    console.error('[TN webhook] Error:', error.response?.data || error.message);
+    console.error('[TN webhook] Error:', error.response?.data || error.message || error);
   }
 });
 
@@ -128,7 +141,7 @@ app.get('/health', (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-const PORT = process.env.PORT || 3010;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor escuchando en puerto ${PORT}`);
 });

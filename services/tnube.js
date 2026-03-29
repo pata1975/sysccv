@@ -1,80 +1,125 @@
-require('dotenv').config();
-
 const axios = require('axios');
-
-const baseURL = `https://api.tiendanube.com/v1/${process.env.TN_USER_ID}`;
 
 function getHeaders() {
   return {
     Authentication: `bearer ${process.env.TN_ACCESS_TOKEN}`,
-    'User-Agent': process.env.TN_USER_AGENT || 'ML-TN Sync (dev@example.com)',
-    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Type': 'application/json',
   };
 }
 
-function cleanSku(value) {
-  return value == null ? null : String(value).trim();
+async function getTNProductBySKU(sku) {
+  try {
+    const targetSku = String(sku).trim();
+
+    const res = await axios.get(`https://api.tiendanube.com/v1/${process.env.TN_USER_ID}/products`, {
+      params: { q: targetSku },
+      headers: getHeaders(),
+    });
+
+    if (!res.data || res.data.length === 0) {
+      console.log(`🔍 El SKU "${targetSku}" no existe en ninguna página de Tiendanube.`);
+      return null;
+    }
+
+    for (const product of res.data) {
+      const variant = product.variants.find((v) => String(v.sku).trim() === targetSku);
+      if (variant) {
+        return {
+          productId: product.id,
+          variantId: variant.id,
+          stock: variant.stock,
+        };
+      }
+    }
+
+    return null;
+  } catch (err) {
+    console.error('❌ Error TN:', err.response?.data || err.message);
+    return null;
+  }
 }
 
-function normalizeVariant(variant, productId) {
-  return {
-    product_id: productId ?? variant.product_id,
-    variant_id: variant.id,
-    sku: cleanSku(variant.sku),
-    stock: variant.stock,
-    updated_at: variant.updated_at || null,
-    inventory_levels: Array.isArray(variant.inventory_levels) ? variant.inventory_levels : [],
-  };
+async function updateTNStock(productId, variantId, stock) {
+  try {
+    await axios.put(
+      `https://api.tiendanube.com/v1/${process.env.TN_USER_ID}/products/${productId}/variants/${variantId}`,
+      { stock: parseInt(stock, 10) },
+      { headers: getHeaders() }
+    );
+    return true;
+  } catch (err) {
+    console.error('❌ Error API Tiendanube (Update):', err.response?.data || err.message);
+    throw err;
+  }
 }
 
-async function getTNProductById(productId) {
-  const { data } = await axios.get(`${baseURL}/products/${productId}`, {
+async function getTNProductById(id) {
+  try {
+    const res = await axios.get(`https://api.tiendanube.com/v1/${process.env.TN_USER_ID}/products/${id}`, {
+      headers: getHeaders(),
+    });
+
+    return (res.data?.variants || []).map((v) => ({
+      sku: v.sku ? String(v.sku).trim() : null,
+      stock: parseInt(v.stock || 0, 10),
+    }));
+  } catch (err) {
+    console.error(`❌ Error TN [${id}]:`, err.response?.data || err.message);
+    return null;
+  }
+}
+
+async function getTNVariantBySKU(sku) {
+  const res = await axios.get(`https://api.tiendanube.com/v1/${process.env.TN_USER_ID}/products`, {
     headers: getHeaders(),
-    timeout: 30000,
   });
 
-  return {
-    id: data.id,
-    variants: Array.isArray(data.variants)
-      ? data.variants.map((variant) => normalizeVariant(variant, data.id))
-      : [],
-  };
-}
+  for (const product of res.data) {
+    const variant = product.variants.find((v) => String(v.sku).trim() === String(sku).trim());
+    if (variant) {
+      return {
+        product_id: product.id,
+        variant_id: variant.id,
+        stock: variant.stock,
+      };
+    }
+  }
 
-async function getTNVariantBySKU(rawSku) {
-  const sku = cleanSku(rawSku);
-  if (!sku) return null;
-
-  const { data } = await axios.get(`${baseURL}/products/sku/${encodeURIComponent(sku)}`, {
-    headers: getHeaders(),
-    timeout: 30000,
-  });
-
-  if (!data?.id || !Array.isArray(data?.variants)) return null;
-
-  const variant = data.variants.find((v) => cleanSku(v.sku) === sku);
-  if (!variant) return null;
-
-  return normalizeVariant(variant, data.id);
+  return null;
 }
 
 async function updateTNVariantStock(productId, variantId, stock) {
-  const payload = { stock: Number.isFinite(Number(stock)) ? Number(stock) : 0 };
-
-  const { data } = await axios.put(
-    `${baseURL}/products/${productId}/variants/${variantId}`,
-    payload,
-    {
-      headers: getHeaders(),
-      timeout: 30000,
-    }
+  return axios.put(
+    `https://api.tiendanube.com/v1/${process.env.TN_USER_ID}/products/${productId}/variants/${variantId}`,
+    { stock: parseInt(stock, 10) },
+    { headers: getHeaders() }
   );
+}
 
-  return data;
+async function syncToTiendanube(sku, newStock) {
+  try {
+    const targetStock = parseInt(newStock, 10);
+    const variantData = await getTNVariantBySKU(sku);
+
+    if (!variantData) {
+      console.warn(`[TN-SERVICE] SKU ${sku} no hallado en la tienda.`);
+      return null;
+    }
+
+    console.log(`[TN-SERVICE] Actualizando SKU ${sku} -> Stock: ${targetStock}`);
+    await updateTNVariantStock(variantData.product_id, variantData.variant_id, targetStock);
+    return true;
+  } catch (err) {
+    console.error(`[TN-SERVICE] Error en syncToTiendanube para SKU ${sku}:`, err.response?.data || err.message);
+    throw err;
+  }
 }
 
 module.exports = {
+  getTNProductBySKU,
+  updateTNStock,
   getTNProductById,
   getTNVariantBySKU,
   updateTNVariantStock,
+  syncToTiendanube,
 };
