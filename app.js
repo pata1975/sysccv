@@ -6,6 +6,12 @@ const tnService = require('./services/tnube');
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.use((req, res, next) => {
+  console.log(`[HTTP] ${req.method} ${req.originalUrl}`);
+  next();
+});
 
 function normalizeStock(value) {
   if (value === '' || value === null || value === undefined) return 0;
@@ -39,7 +45,10 @@ async function syncMlEntryToTN(entry) {
 
 async function syncTnVariantToML(variant) {
   const sku = variant?.sku ? String(variant.sku).trim() : null;
-  if (!sku) return;
+  if (!sku) {
+    console.warn('[TN -> ML] Variante sin SKU. Se omite.', variant);
+    return;
+  }
 
   const mlMatch = await mlService.findMLPublicationBySKU(sku);
   if (!mlMatch) {
@@ -60,10 +69,20 @@ async function syncTnVariantToML(variant) {
 }
 
 app.post('/webhooks/ml', async (req, res) => {
+  console.log('[ML webhook] entró');
+  console.log('[ML webhook] content-type:', req.headers['content-type']);
+  console.log('[ML webhook] query:', req.query);
+  console.log('[ML webhook] body:', req.body);
+
   res.sendStatus(200);
 
-  const { resource, topic } = req.body || {};
-  if (!resource || !['items', 'stock-locations'].includes(topic)) return;
+  const resource = req.body?.resource || req.query?.resource;
+  const topic = req.body?.topic || req.query?.topic || req.body?.type;
+
+  if (!resource || !['items', 'stock-locations', 'user-products'].includes(topic)) {
+    console.warn('[ML webhook] ignorado por payload/topic.', { resource, topic });
+    return;
+  }
 
   try {
     const entries = await mlService.getStockEntriesFromResource(resource);
@@ -81,10 +100,18 @@ app.post('/webhooks/ml', async (req, res) => {
 });
 
 app.post('/webhooks/tn', async (req, res) => {
+  console.log('[TN webhook] entró');
+  console.log('[TN webhook] content-type:', req.headers['content-type']);
+  console.log('[TN webhook] query:', req.query);
+  console.log('[TN webhook] body:', req.body);
+
   res.sendStatus(200);
 
-  const productId = req.body?.id;
-  if (!productId) return;
+  const productId = req.body?.id || req.query?.id;
+  if (!productId) {
+    console.warn('[TN webhook] ignorado por falta de id.');
+    return;
+  }
 
   try {
     const product = await tnService.getTNProductById(productId);
@@ -101,7 +128,11 @@ app.post('/webhooks/tn', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Servidor de sincronización corriendo en puerto ${PORT}`);
+app.get('/health', (req, res) => {
+  res.status(200).json({ ok: true });
+});
+
+const PORT = process.env.PORT || 3010;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Servidor escuchando en puerto ${PORT}`);
 });

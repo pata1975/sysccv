@@ -10,9 +10,25 @@ const api = axios.create({
 });
 
 let refreshPromise = null;
+let refreshTokenInvalid = false;
+let currentAccessToken = process.env.ML_ACCESS_TOKEN || null;
+let currentRefreshToken = process.env.ML_REFRESH_TOKEN || null;
 
-function getAuthHeaders(token = process.env.ML_ACCESS_TOKEN) {
+function getAuthHeaders(token = currentAccessToken || process.env.ML_ACCESS_TOKEN) {
   return { Authorization: `Bearer ${token}` };
+}
+
+function setCurrentTokens(accessToken, refreshToken) {
+  if (accessToken) {
+    currentAccessToken = accessToken;
+    process.env.ML_ACCESS_TOKEN = accessToken;
+  }
+
+  if (refreshToken) {
+    currentRefreshToken = refreshToken;
+    process.env.ML_REFRESH_TOKEN = refreshToken;
+    refreshTokenInvalid = false;
+  }
 }
 
 function toInt(value, fallback = 0) {
@@ -117,38 +133,64 @@ function persistTokensToEnvFile(accessToken, refreshToken) {
   fs.writeFileSync(envPath, content, 'utf8');
 }
 
+function isInvalidGrantError(error) {
+  const data = error?.response?.data;
+  return data?.error === 'invalid_grant';
+}
+
+function createMlReauthError(originalError) {
+  const message = 'Mercado Libre rechazó el refresh token (invalid_grant). Tenés que reautorizar la app y actualizar ML_ACCESS_TOKEN y ML_REFRESH_TOKEN.';
+  const err = new Error(message);
+  err.code = 'ML_REAUTH_REQUIRED';
+  err.original = originalError?.response?.data || originalError?.message || originalError;
+  return err;
+}
+
 async function refreshMLToken() {
+  if (refreshTokenInvalid) {
+    throw createMlReauthError({ response: { data: { error: 'invalid_grant' } } });
+  }
+
   if (refreshPromise) return refreshPromise;
 
   refreshPromise = (async () => {
-    const { ML_CLIENT_ID, ML_CLIENT_SECRET, ML_REFRESH_TOKEN } = process.env;
+    const clientId = process.env.ML_CLIENT_ID;
+    const clientSecret = process.env.ML_CLIENT_SECRET;
+    const refreshToken = currentRefreshToken || process.env.ML_REFRESH_TOKEN;
 
-    if (!ML_CLIENT_ID || !ML_CLIENT_SECRET || !ML_REFRESH_TOKEN) {
+    if (!clientId || !clientSecret || !refreshToken) {
       throw new Error('Faltan ML_CLIENT_ID, ML_CLIENT_SECRET o ML_REFRESH_TOKEN en el .env');
     }
 
     const params = new URLSearchParams();
     params.append('grant_type', 'refresh_token');
-    params.append('client_id', ML_CLIENT_ID);
-    params.append('client_secret', ML_CLIENT_SECRET);
-    params.append('refresh_token', ML_REFRESH_TOKEN);
-
-    const { data } = await axios.post('https://api.mercadolibre.com/oauth/token', params, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      timeout: 30000,
-    });
-
-    process.env.ML_ACCESS_TOKEN = data.access_token;
-    process.env.ML_REFRESH_TOKEN = data.refresh_token;
+    params.append('client_id', clientId);
+    params.append('client_secret', clientSecret);
+    params.append('refresh_token', refreshToken);
 
     try {
-      persistTokensToEnvFile(data.access_token, data.refresh_token);
-    } catch (error) {
-      console.warn('[ML auth] No se pudieron persistir los tokens en el .env:', error.message);
-    }
+      const { data } = await axios.post('https://api.mercadolibre.com/oauth/token', params, {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 30000,
+      });
 
-    console.log('[ML auth] Token renovado correctamente.');
-    return data.access_token;
+      setCurrentTokens(data.access_token, data.refresh_token);
+
+      try {
+        persistTokensToEnvFile(data.access_token, data.refresh_token);
+      } catch (error) {
+        console.warn('[ML auth] No se pudieron persistir los tokens en el .env:', error.message);
+      }
+
+      console.log('[ML auth] Token renovado correctamente.');
+      return data.access_token;
+    } catch (error) {
+      if (isInvalidGrantError(error)) {
+        refreshTokenInvalid = true;
+        throw createMlReauthError(error);
+      }
+      throw error;
+    }
   })();
 
   try {
@@ -248,8 +290,9 @@ async function getItemIdsByUserProductId(userProductId) {
   } catch (error) {
     console.warn('[ML user-product] Falló búsqueda directa por user_product_id.', {
       userProductId,
-      message: error.response?.data || error.message,
+      message: error.code === 'ML_REAUTH_REQUIRED' ? error.message : error.response?.data || error.message,
     });
+    throw error;
   }
 
   try {
@@ -264,8 +307,9 @@ async function getItemIdsByUserProductId(userProductId) {
   } catch (error) {
     console.warn('[ML user-product] Falló fallback por product_id.', {
       userProductId,
-      message: error.response?.data || error.message,
+      message: error.code === 'ML_REAUTH_REQUIRED' ? error.message : error.response?.data || error.message,
     });
+    throw error;
   }
 
   return [];
@@ -307,9 +351,18 @@ async function getStockEntriesFromItemId(itemId) {
 
 async function getStockEntriesFromUserProductId(userProductId) {
   const [userProduct, itemIds, userProductStock] = await Promise.all([
-    getUserProduct(userProductId).catch(() => null),
-    getItemIdsByUserProductId(userProductId).catch(() => []),
-    getUserProductStock(userProductId).catch(() => null),
+    getUserProduct(userProductId).catch((error) => {
+      if (error?.code === 'ML_REAUTH_REQUIRED') throw error;
+      return null;
+    }),
+    getItemIdsByUserProductId(userProductId).catch((error) => {
+      if (error?.code === 'ML_REAUTH_REQUIRED') throw error;
+      return [];
+    }),
+    getUserProductStock(userProductId).catch((error) => {
+      if (error?.code === 'ML_REAUTH_REQUIRED') throw error;
+      return null;
+    }),
   ]);
 
   let entries = [];
@@ -318,7 +371,10 @@ async function getStockEntriesFromUserProductId(userProductId) {
     const rows = await multigetItemsByIds(
       itemIds,
       'id,user_product_id,available_quantity,seller_custom_field,attributes,variations'
-    ).catch(() => []);
+    ).catch((error) => {
+      if (error?.code === 'ML_REAUTH_REQUIRED') throw error;
+      return [];
+    });
 
     for (const row of rows) {
       if (row?.code !== 200 || !row?.body) continue;
@@ -330,7 +386,10 @@ async function getStockEntriesFromUserProductId(userProductId) {
   }
 
   if (!entries.length && userProduct?.item_id) {
-    const fallbackEntries = await getStockEntriesFromItemId(userProduct.item_id).catch(() => []);
+    const fallbackEntries = await getStockEntriesFromItemId(userProduct.item_id).catch((error) => {
+      if (error?.code === 'ML_REAUTH_REQUIRED') throw error;
+      return [];
+    });
     entries.push(...fallbackEntries);
   }
 
@@ -400,13 +459,19 @@ async function findMLPublicationBySKU(rawSku) {
   const searches = [{ seller_sku: sku }, { sku }];
 
   for (const params of searches) {
-    const itemIds = await searchItemIdsByParams(params).catch(() => []);
+    const itemIds = await searchItemIdsByParams(params).catch((error) => {
+      if (error?.code === 'ML_REAUTH_REQUIRED') throw error;
+      return [];
+    });
     if (!itemIds.length) continue;
 
     const rows = await multigetItemsByIds(
       itemIds,
       'id,user_product_id,available_quantity,seller_custom_field,attributes,variations'
-    ).catch(() => []);
+    ).catch((error) => {
+      if (error?.code === 'ML_REAUTH_REQUIRED') throw error;
+      return [];
+    });
 
     for (const row of rows) {
       if (row?.code !== 200 || !row?.body) continue;

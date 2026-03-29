@@ -1,18 +1,14 @@
 {
-  "name": "sysccv",
+  "name": "sync-ml-tn",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
+  "main": "app.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node app.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
-    "axios": "^1.13.6",
-    "dotenv": "^17.3.1",
-    "express": "^5.2.1"
+    "axios": "^1.8.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.21.0"
   }
 }
