@@ -91,6 +91,45 @@ function dedupeEntries(entries) {
   });
 }
 
+function isAvailableQuantityNotModifiableError(error) {
+  const data = error?.response?.data;
+  const causes = Array.isArray(data?.cause) ? data.cause : [];
+  return (
+    error?.response?.status === 400 &&
+    (causes.some((cause) => cause?.cause_id === 240) ||
+      /available_quantity is not modifiable/i.test(data?.message || '') ||
+      /available_quantity is not modifiable/i.test(causes.map((c) => c?.message).join(' | ')))
+  );
+}
+
+function pickUserProductStockTargets(stockResponse) {
+  const locations = Array.isArray(stockResponse?.raw?.locations) ? stockResponse.raw.locations : [];
+  const sellerWarehouses = locations.filter((location) => location?.type === 'seller_warehouse');
+  const sellingAddresses = locations.filter((location) => location?.type === 'selling_address');
+
+  const targets = [];
+
+  for (const location of sellerWarehouses) {
+    targets.push({
+      type: 'seller_warehouse',
+      network_node_id: location?.network_node_id || null,
+      store_id: location?.store_id || null,
+      currentQuantity: toInt(location?.quantity, 0),
+    });
+  }
+
+  for (const location of sellingAddresses) {
+    targets.push({
+      type: 'selling_address',
+      network_node_id: null,
+      store_id: null,
+      currentQuantity: toInt(location?.quantity, 0),
+    });
+  }
+
+  return targets;
+}
+
 function extractItemIdsFromSearch(data) {
   const results = Array.isArray(data?.results) ? data.results : [];
 
@@ -602,19 +641,128 @@ async function updateItemStock(itemId, newStock) {
   });
 }
 
+async function updateUserProductStockTarget(userProductId, stockResponse, target, newStock) {
+  if (!userProductId) {
+    throw new Error('No se recibió userProductId para updateUserProductStockTarget');
+  }
+
+  const xVersion = stockResponse?.xVersion;
+  if (!xVersion) {
+    throw new Error(`No se recibió x-version para actualizar stock del user product ${userProductId}`);
+  }
+
+  const payload = { quantity: toInt(newStock, 0) };
+
+  if (target?.type === 'seller_warehouse') {
+    if (target?.network_node_id) payload.network_node_id = target.network_node_id;
+    if (target?.store_id) payload.store_id = target.store_id;
+  }
+
+  await mlRequest({
+    method: 'PUT',
+    url: `/user-products/${userProductId}/stock/type/${target.type}`,
+    headers: {
+      'x-version': xVersion,
+      'Content-Type': 'application/json',
+    },
+    data: payload,
+  });
+}
+
+async function updateMLStockViaNewModel(target, newStock) {
+  let userProductId = target?.userProductId || null;
+
+  if (!userProductId) {
+    const item = await getItem(target?.itemId || target);
+
+    if (target?.variationId && Array.isArray(item?.variations)) {
+      const variation = item.variations.find((row) => row?.id === target.variationId);
+      userProductId = variation?.user_product_id || null;
+    }
+
+    if (!userProductId) {
+      userProductId = item?.user_product_id || null;
+    }
+  }
+
+  if (!userProductId) {
+    throw new Error('No se pudo determinar user_product_id para actualizar stock con el modelo nuevo de Mercado Libre');
+  }
+
+  const stockResponse = await getUserProductStock(userProductId);
+  const targets = pickUserProductStockTargets(stockResponse);
+
+  if (!targets.length) {
+    throw new Error(`El user product ${userProductId} no devolvió stock_locations compatibles para actualizar stock por el modelo nuevo`);
+  }
+
+  const orderedTargets = [
+    ...targets.filter((target) => target.type === 'seller_warehouse'),
+    ...targets.filter((target) => target.type === 'selling_address'),
+  ];
+
+  const errors = [];
+
+  for (const stockTarget of orderedTargets) {
+    try {
+      await updateUserProductStockTarget(userProductId, stockResponse, stockTarget, newStock);
+      console.warn('[ML stock] stock actualizado por el modelo nuevo de User Products.', {
+        userProductId,
+        type: stockTarget.type,
+        network_node_id: stockTarget.network_node_id || null,
+        store_id: stockTarget.store_id || null,
+        newStock: toInt(newStock, 0),
+      });
+      return;
+    } catch (error) {
+      errors.push({
+        type: stockTarget.type,
+        network_node_id: stockTarget.network_node_id || null,
+        store_id: stockTarget.store_id || null,
+        message: error?.response?.data || error?.message || error,
+      });
+    }
+  }
+
+  const details = {
+    userProductId,
+    stockLocations: orderedTargets,
+    errors,
+  };
+
+  const err = new Error(`No se pudo actualizar el stock del user product ${userProductId} con la ruta nueva de Mercado Libre`);
+  err.details = details;
+  throw err;
+}
+
 async function updateMLStock(target, newStock) {
   if (!target) throw new Error('No se recibió target para updateMLStock');
 
-  if (typeof target === 'string') {
-    return updateItemStock(target, newStock);
-  }
+  try {
+    if (typeof target === 'string') {
+      return await updateItemStock(target, newStock);
+    }
 
-  if (target.variationId) {
-    return updateVariationStock(target.itemId, target.variationId, newStock);
-  }
+    if (target.variationId) {
+      return await updateVariationStock(target.itemId, target.variationId, newStock);
+    }
 
-  if (target.itemId) {
-    return updateItemStock(target.itemId, newStock);
+    if (target.itemId) {
+      return await updateItemStock(target.itemId, newStock);
+    }
+  } catch (error) {
+    if (!isAvailableQuantityNotModifiableError(error)) {
+      throw error;
+    }
+
+    console.warn('[ML stock] available_quantity no es modificable por /items. Se intenta fallback con User Products.', {
+      itemId: typeof target === 'string' ? target : target?.itemId || null,
+      variationId: typeof target === 'string' ? null : target?.variationId || null,
+      userProductId: typeof target === 'string' ? null : target?.userProductId || null,
+      message: error?.response?.data || error?.message || error,
+    });
+
+    return updateMLStockViaNewModel(target, newStock);
   }
 
   throw new Error('No se pudo determinar itemId/variationId para actualizar stock en Mercado Libre');
@@ -645,6 +793,7 @@ module.exports = {
   getStockEntriesFromUserProductId,
   findMLPublicationBySKU,
   updateMLStock,
+  updateMLStockViaNewModel,
   executeRequest,
   findMLItemBySKU,
 };
