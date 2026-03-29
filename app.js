@@ -101,27 +101,45 @@ app.post('/webhooks/ml', async (req, res) => {
 
 app.post('/webhooks/tn', async (req, res) => {
   console.log('[TN webhook] entró');
-  console.log('[TN webhook] content-type:', req.headers['content-type']);
-  console.log('[TN webhook] query:', req.query);
   console.log('[TN webhook] body:', req.body);
 
   res.sendStatus(200);
 
-  const productId = req.body?.id || req.query?.id;
+  const productId = req.body?.id;
   if (!productId) {
-    console.warn('[TN webhook] ignorado por falta de id.');
+    console.warn('[TN webhook] sin id');
     return;
   }
 
   try {
-    const product = await tnService.getTNProductById(productId);
-    if (!product?.variants?.length) {
+    const variants = await tnService.getTNProductById(productId);
+
+    if (!Array.isArray(variants) || !variants.length) {
       console.warn(`[TN webhook] Producto ${productId} sin variantes.`);
       return;
     }
 
-    for (const variant of product.variants) {
-      await syncTnVariantToML(variant);
+    for (const variant of variants) {
+      const sku = variant?.sku ? String(variant.sku).trim() : null;
+      if (!sku) continue;
+
+      const mlItemId = await mlService.findMLItemBySKU(sku, process.env.ML_ACCESS_TOKEN);
+      if (!mlItemId) {
+        console.warn(`[TN -> ML] SKU ${sku} no encontrado en Mercado Libre.`);
+        continue;
+      }
+
+      const mlData = await mlService.executeRequest(mlItemId, process.env.ML_ACCESS_TOKEN);
+      const tnStock = normalizeStock(variant.stock);
+      const mlStock = normalizeStock(mlData?.stock);
+
+      if (tnStock === mlStock) {
+        console.log(`[TN -> ML] SKU ${sku} ya está sincronizado en ${tnStock}.`);
+        continue;
+      }
+
+      await mlService.updateMLStock(mlItemId, tnStock, process.env.ML_ACCESS_TOKEN);
+      console.log(`[TN -> ML] SKU ${sku} sincronizado ${mlStock} -> ${tnStock}.`);
     }
   } catch (error) {
     console.error('[TN webhook] Error:', error.response?.data || error.message);
