@@ -10,15 +10,61 @@ const api = axios.create({
 });
 
 let refreshPromise = null;
-let refreshTokenInvalid = false;
 let currentAccessToken = process.env.ML_ACCESS_TOKEN || null;
 let currentRefreshToken = process.env.ML_REFRESH_TOKEN || null;
+let invalidRefreshToken = null;
 
-function getAuthHeaders(token = currentAccessToken || process.env.ML_ACCESS_TOKEN) {
-  return { Authorization: `Bearer ${token}` };
+function resolveTokenStorePath() {
+  if (process.env.ML_TOKEN_STORE_PATH) return process.env.ML_TOKEN_STORE_PATH;
+  if (fs.existsSync('/data')) return '/data/ml_tokens.json';
+  return path.join(process.cwd(), '.ml_tokens.json');
 }
 
-function setCurrentTokens(accessToken, refreshToken) {
+const tokenStorePath = resolveTokenStorePath();
+
+function ensureParentDir(filePath) {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function readTokenStore() {
+  try {
+    if (!fs.existsSync(tokenStorePath)) return null;
+    const raw = fs.readFileSync(tokenStorePath, 'utf8');
+    if (!raw.trim()) return null;
+    const data = JSON.parse(raw);
+    return {
+      accessToken: data?.accessToken || data?.ML_ACCESS_TOKEN || data?.access_token || null,
+      refreshToken: data?.refreshToken || data?.ML_REFRESH_TOKEN || data?.refresh_token || null,
+      updatedAt: data?.updatedAt || null,
+    };
+  } catch (error) {
+    console.warn('[ML auth] No se pudo leer el store persistente de tokens:', error.message);
+    return null;
+  }
+}
+
+function persistTokensToStore(accessToken, refreshToken) {
+  if (!accessToken && !refreshToken) return;
+
+  try {
+    ensureParentDir(tokenStorePath);
+    const payload = {
+      accessToken: accessToken || currentAccessToken || null,
+      refreshToken: refreshToken || currentRefreshToken || null,
+      updatedAt: new Date().toISOString(),
+    };
+    const tmpPath = `${tokenStorePath}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf8');
+    fs.renameSync(tmpPath, tokenStorePath);
+  } catch (error) {
+    console.warn('[ML auth] No se pudo persistir el store de tokens:', error.message);
+  }
+}
+
+function setCurrentTokens(accessToken, refreshToken, options = {}) {
+  const prevRefresh = currentRefreshToken || process.env.ML_REFRESH_TOKEN || null;
+
   if (accessToken) {
     currentAccessToken = accessToken;
     process.env.ML_ACCESS_TOKEN = accessToken;
@@ -27,8 +73,56 @@ function setCurrentTokens(accessToken, refreshToken) {
   if (refreshToken) {
     currentRefreshToken = refreshToken;
     process.env.ML_REFRESH_TOKEN = refreshToken;
-    refreshTokenInvalid = false;
   }
+
+  const newRefresh = currentRefreshToken || process.env.ML_REFRESH_TOKEN || null;
+  if (newRefresh && newRefresh !== prevRefresh) {
+    invalidRefreshToken = null;
+  }
+
+  if (options.persistStore) {
+    persistTokensToStore(accessToken, refreshToken);
+  }
+
+  if (options.persistEnvFile) {
+    try {
+      persistTokensToEnvFile(accessToken || currentAccessToken, refreshToken || currentRefreshToken);
+    } catch (error) {
+      console.warn('[ML auth] No se pudieron persistir los tokens en el .env:', error.message);
+    }
+  }
+}
+
+function loadTokensFromStore(options = {}) {
+  const stored = readTokenStore();
+  if (!stored) return null;
+
+  const shouldApply =
+    options.preferStore ||
+    !currentAccessToken ||
+    !currentRefreshToken ||
+    stored.refreshToken !== currentRefreshToken ||
+    stored.accessToken !== currentAccessToken;
+
+  if (shouldApply) {
+    setCurrentTokens(stored.accessToken, stored.refreshToken);
+    if (!options.silent) {
+      console.log('[ML auth] Tokens cargados desde store persistente.', {
+        hasAccessToken: !!stored.accessToken,
+        hasRefreshToken: !!stored.refreshToken,
+        updatedAt: stored.updatedAt || null,
+        tokenStorePath,
+      });
+    }
+  }
+
+  return stored;
+}
+
+loadTokensFromStore({ preferStore: true, silent: true });
+
+function getAuthHeaders(token = currentAccessToken || process.env.ML_ACCESS_TOKEN) {
+  return { Authorization: `Bearer ${token}` };
 }
 
 function toInt(value, fallback = 0) {
@@ -186,7 +280,10 @@ function createMlReauthError(originalError) {
 }
 
 async function refreshMLToken() {
-  if (refreshTokenInvalid) {
+  loadTokensFromStore({ preferStore: true, silent: true });
+
+  const refreshTokenInState = currentRefreshToken || process.env.ML_REFRESH_TOKEN || null;
+  if (invalidRefreshToken && refreshTokenInState && invalidRefreshToken === refreshTokenInState) {
     throw createMlReauthError({ response: { data: { error: 'invalid_grant' } } });
   }
 
@@ -195,40 +292,61 @@ async function refreshMLToken() {
   refreshPromise = (async () => {
     const clientId = process.env.ML_CLIENT_ID;
     const clientSecret = process.env.ML_CLIENT_SECRET;
-    const refreshToken = currentRefreshToken || process.env.ML_REFRESH_TOKEN;
 
-    if (!clientId || !clientSecret || !refreshToken) {
-      throw new Error('Faltan ML_CLIENT_ID, ML_CLIENT_SECRET o ML_REFRESH_TOKEN en el .env');
+    if (!clientId || !clientSecret) {
+      throw new Error('Faltan ML_CLIENT_ID o ML_CLIENT_SECRET en el .env');
     }
 
-    const params = new URLSearchParams();
-    params.append('grant_type', 'refresh_token');
-    params.append('client_id', clientId);
-    params.append('client_secret', clientSecret);
-    params.append('refresh_token', refreshToken);
+    const runRefresh = async (refreshToken) => {
+      if (!refreshToken) {
+        throw new Error('Falta ML_REFRESH_TOKEN. Tenés que reautorizar la app y volver a cargar tokens válidos.');
+      }
 
-    try {
+      const params = new URLSearchParams();
+      params.append('grant_type', 'refresh_token');
+      params.append('client_id', clientId);
+      params.append('client_secret', clientSecret);
+      params.append('refresh_token', refreshToken);
+
       const { data } = await axios.post('https://api.mercadolibre.com/oauth/token', params, {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         timeout: 30000,
       });
 
-      setCurrentTokens(data.access_token, data.refresh_token);
+      setCurrentTokens(data.access_token, data.refresh_token, {
+        persistStore: true,
+        persistEnvFile: process.env.ML_PERSIST_TO_ENV_FILE === 'true',
+      });
 
-      try {
-        persistTokensToEnvFile(data.access_token, data.refresh_token);
-      } catch (error) {
-        console.warn('[ML auth] No se pudieron persistir los tokens en el .env:', error.message);
-      }
+      console.log('[ML auth] Token renovado correctamente.', {
+        tokenStorePath,
+        persistedToStore: true,
+        persistedToEnvFile: process.env.ML_PERSIST_TO_ENV_FILE === 'true',
+      });
 
-      console.log('[ML auth] Token renovado correctamente.');
       return data.access_token;
+    };
+
+    const firstRefreshToken = currentRefreshToken || process.env.ML_REFRESH_TOKEN || null;
+
+    try {
+      return await runRefresh(firstRefreshToken);
     } catch (error) {
-      if (isInvalidGrantError(error)) {
-        refreshTokenInvalid = true;
-        throw createMlReauthError(error);
+      if (!isInvalidGrantError(error)) throw error;
+
+      const previousRefreshToken = firstRefreshToken;
+      const stored = loadTokensFromStore({ preferStore: true, silent: true });
+      const fallbackRefreshToken = stored?.refreshToken || currentRefreshToken || process.env.ML_REFRESH_TOKEN || null;
+
+      if (fallbackRefreshToken && fallbackRefreshToken !== previousRefreshToken) {
+        console.warn('[ML auth] El refresh token actual fue rechazado. Se reintenta con el último token persistido en el store.', {
+          tokenStorePath,
+        });
+        return await runRefresh(fallbackRefreshToken);
       }
-      throw error;
+
+      invalidRefreshToken = previousRefreshToken;
+      throw createMlReauthError(error);
     }
   })();
 
