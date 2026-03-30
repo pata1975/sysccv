@@ -940,6 +940,11 @@ async function executeRequest(idOrResource) {
   return entries[0] || null;
 }
 
+
+async function getMLData(idOrResource) {
+  return executeRequest(idOrResource);
+}
+
 async function findMLItemBySKU(rawSku) {
   const match = await findMLPublicationBySKU(rawSku);
   return match?.itemId || null;
@@ -954,5 +959,6 @@ module.exports = {
   updateMLStock,
   updateMLStockViaNewModel,
   executeRequest,
+  getMLData,
   findMLItemBySKU,
 };
