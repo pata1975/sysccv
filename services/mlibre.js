@@ -985,6 +985,21 @@ async function findMLItemBySKU(rawSku) {
   return match?.itemId || null;
 }
 
+async function getMLData(id) {
+  if (!id) return null;
+
+  if (typeof getStockEntriesFromResource === 'function') {
+    const entries = await getStockEntriesFromResource(id);
+    return Array.isArray(entries) && entries.length ? entries[0] : null;
+  }
+
+  if (typeof executeRequest === 'function') {
+    return await executeRequest(id, process.env.ML_ACCESS_TOKEN);
+  }
+
+  throw new Error('No hay ninguna implementación compatible para getMLData');
+}
+
 module.exports = {
   refreshMLToken,
   getStockEntriesFromResource,
@@ -995,4 +1010,5 @@ module.exports = {
   updateMLStockViaNewModel,
   executeRequest,
   findMLItemBySKU,
+  getMLData
 };
