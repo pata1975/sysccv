@@ -1,21 +1,13 @@
+const mlibreService = require('../services/mlibre');
 const arcaService = require('./arca.service');
 const pdfService = require('./pdf.service');
 
-async function getMercadoLibreOrderMock(job) {
-  return {
-    orderId: job.orderId,
-    buyerName: 'Comprador de prueba',
-    buyerDocumentType: 'DNI',
-    buyerDocumentNumber: '00000000',
-    total: 12345,
-    items: [
-      {
-        title: 'Producto de prueba MercadoLibre',
-        quantity: 1,
-        unitPrice: 12345
-      }
-    ]
-  };
+async function getMercadoLibreOrder(job) {
+  if (!job.orderId) {
+    throw new Error(`El job ${job.id} no tiene orderId`);
+  }
+
+  return mlibreService.getOrderForInvoice(job.orderId);
 }
 
 async function processInvoiceJob(job) {
@@ -23,7 +15,7 @@ async function processInvoiceJob(job) {
     throw new Error(`Unsupported invoice source: ${job.source}`);
   }
 
-  const order = await getMercadoLibreOrderMock(job);
+  const order = await getMercadoLibreOrder(job);
 
   const invoice = await arcaService.createInvoiceMock({
     job,
@@ -38,6 +30,11 @@ async function processInvoiceJob(job) {
 
   return {
     orderId: order.orderId,
+    packId: order.packId,
+    status: order.status,
+    buyerName: order.buyerName,
+    total: order.total,
+    currency: order.currency,
     invoiceType: invoice.invoiceType,
     pointOfSale: invoice.pointOfSale,
     invoiceNumber: invoice.invoiceNumber,

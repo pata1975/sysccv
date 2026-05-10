@@ -414,6 +414,95 @@ async function mlRequest(config, { retry = true } = {}) {
   }
 }
 
+async function getOrderById(orderId) {
+  if (!orderId) {
+    throw new Error('No se recibió orderId para getOrderById');
+  }
+
+  const { data } = await mlRequest({
+    method: 'GET',
+    url: `/orders/${orderId}`
+  });
+
+  return data;
+}
+
+async function getOrderBillingInfo(orderId) {
+  if (!orderId) {
+    throw new Error('No se recibió orderId para getOrderBillingInfo');
+  }
+
+  const { data } = await mlRequest({
+    method: 'GET',
+    url: `/orders/${orderId}/billing_info`
+  });
+
+  return data;
+}
+
+function normalizeOrderItemForInvoice(orderItem) {
+  const quantity = Number(orderItem?.quantity || 0);
+  const unitPrice = Number(orderItem?.unit_price || 0);
+
+  return {
+    itemId: orderItem?.item?.id || null,
+    title: orderItem?.item?.title || 'Producto sin título',
+    sku:
+      orderItem?.item?.seller_sku ||
+      orderItem?.item?.seller_custom_field ||
+      null,
+    quantity,
+    unitPrice,
+    total: quantity * unitPrice,
+    raw: orderItem
+  };
+}
+
+function normalizeMercadoLibreOrderForInvoice(order, billingInfo = null) {
+  const items = Array.isArray(order?.order_items)
+    ? order.order_items.map(normalizeOrderItemForInvoice)
+    : [];
+
+  const totalFromItems = items.reduce((acc, item) => acc + item.total, 0);
+
+  return {
+    orderId: order?.id ? String(order.id) : null,
+    packId: order?.pack_id ? String(order.pack_id) : null,
+    status: order?.status || null,
+    dateCreated: order?.date_created || null,
+    dateClosed: order?.date_closed || null,
+    currency: order?.currency_id || 'ARS',
+    total: Number(order?.total_amount || totalFromItems || 0),
+    paidAmount: Number(order?.paid_amount || 0),
+    buyerName:
+      [order?.buyer?.first_name, order?.buyer?.last_name]
+        .filter(Boolean)
+        .join(' ') || 'Consumidor final',
+    buyerId: order?.buyer?.id || null,
+    buyerNickname: order?.buyer?.nickname || null,
+    billingInfo,
+    items,
+    raw: order
+  };
+}
+
+async function getOrderForInvoice(orderId) {
+  const order = await getOrderById(orderId);
+
+  let billingInfo = null;
+
+  try {
+    billingInfo = await getOrderBillingInfo(orderId);
+  } catch (error) {
+    console.warn('[ML invoice] No se pudo obtener billing_info de la orden.', {
+      orderId,
+      message: error?.response?.data || error?.message || error
+    });
+  }
+
+  return normalizeMercadoLibreOrderForInvoice(order, billingInfo);
+}
+
 async function getItem(itemId) {
   const { data } = await mlRequest({ method: 'GET', url: `/items/${itemId}` });
   return data;
@@ -1002,6 +1091,11 @@ async function getMLData(id) {
 
 module.exports = {
   refreshMLToken,
+
+  getOrderById,
+  getOrderBillingInfo,
+  getOrderForInvoice,
+
   getStockEntriesFromResource,
   getStockEntriesFromItemId,
   getStockEntriesFromUserProductId,
