@@ -1,0 +1,9 @@
+https://api.mercadopago.com/oauth/token
+
+{
+    "grant_type": "authorization_code",
+    "client_id": "3678298460302514",
+    "client_secret": "igcdasraMpVc3PbzSNAPPZUq08C107hB",
+    "code": "TG-69def79b22a3ee0001ab7765-243943007",
+    "redirect_uri": "https://bridgeccv-production.up.railway.app/webhooks/callback-ml"
+}

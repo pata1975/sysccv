@@ -1,0 +1,1 @@
+https://auth.mercadolibre.com.ar/authorization?response_type=code&client_id=3678298460302514&redirect_uri=https://bridgeccv-production.up.railway.app/webhooks/callback-ml
