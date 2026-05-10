@@ -8,7 +8,7 @@ const INVOICES_DIR = path.join(__dirname, '..', 'data', 'invoices');
 async function createInvoicePdfMock({ job, order, invoice }) {
   await fsPromises.mkdir(INVOICES_DIR, { recursive: true });
 
- const safeTimestamp = new Date()
+const safeTimestamp = new Date()
   .toISOString()
   .replace(/[:.]/g, '-');
 
