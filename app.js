@@ -3,11 +3,12 @@ require('dotenv').config();
 const express = require('express');
 const mlService = require('./services/mlibre');
 const tnService = require('./services/tnube');
-
+const mercadolibreWebhookRoutes = require('./routes/mercadolibreWebhook.routes');
 const app = express();
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
+app.use('/webhooks/mercadolibre', mercadolibreWebhookRoutes);
 app.use((req, res, next) => {
   console.log(`[HTTP] ${req.method} ${req.originalUrl}`);
   next();
