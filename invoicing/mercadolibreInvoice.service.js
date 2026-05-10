@@ -1,6 +1,7 @@
 const mlibreService = require('../services/mlibre');
 const arcaService = require('./arca.service');
 const pdfService = require('./pdf.service');
+const invoiceFiscalService = require('./invoiceFiscal.service');
 
 async function getMercadoLibreOrder(job) {
   if (!job.orderId) {
@@ -16,10 +17,12 @@ async function processInvoiceJob(job) {
   }
 
   const order = await getMercadoLibreOrder(job);
-   
+  const fiscalInvoice = invoiceFiscalService.buildArcaInvoiceRequestFromOrder(order);
+  
   const invoice = await arcaService.createInvoiceMock({
     job,
-    order
+    order,
+    fiscalInvoice
   });
 
   const pdf = await pdfService.createInvoicePdfMock({
@@ -41,7 +44,8 @@ async function processInvoiceJob(job) {
     cae: invoice.cae,
     caeDueDate: invoice.caeDueDate,
     pdfFileName: pdf.fileName,
-    pdfFilePath: pdf.filePath
+    pdfFilePath: pdf.filePath,
+    fiscalInvoice
   };
 }
 
