@@ -16,7 +16,7 @@ async function processInvoiceJob(job) {
   }
 
   const order = await getMercadoLibreOrder(job);
-
+   
   const invoice = await arcaService.createInvoiceMock({
     job,
     order

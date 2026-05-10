@@ -21,7 +21,12 @@ async function runInvoiceWorker() {
 
       console.log(`[invoice worker] Completed job ${job.id}`);
     } catch (error) {
-      console.error(`[invoice worker] Failed job ${job.id}`, error);
+      console.error(`[invoice worker] Failed job ${job.id}`, {
+        message: error?.message,
+        status: error?.response?.status || null,
+        data: error?.response?.data || null,
+        code: error?.code || null
+      });
 
       await invoiceJobService.markFailed(job.id, error);
     }

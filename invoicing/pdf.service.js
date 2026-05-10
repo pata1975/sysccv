@@ -8,8 +8,12 @@ const INVOICES_DIR = path.join(__dirname, '..', 'data', 'invoices');
 async function createInvoicePdfMock({ job, order, invoice }) {
   await fsPromises.mkdir(INVOICES_DIR, { recursive: true });
 
-  const fileName = `factura-mock-${job.id}.pdf`;
-  const filePath = path.join(INVOICES_DIR, fileName);
+ const safeTimestamp = new Date()
+  .toISOString()
+  .replace(/[:.]/g, '-');
+
+const fileName = `factura-mock-${job.id}-${safeTimestamp}.pdf`;
+const filePath = path.join(INVOICES_DIR, fileName);
 
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 50 });
@@ -50,8 +54,35 @@ async function createInvoicePdfMock({ job, order, invoice }) {
     doc.moveDown();
 
     doc.fontSize(12).text('Comprador');
-    doc.fontSize(10).text(order.buyerName || 'Comprador de prueba');
-    doc.text(`Order ID MercadoLibre: ${order.orderId || 'sin order id'}`);
+doc.fontSize(10).text(order.buyerName || 'Consumidor final');
+
+if (order.buyerDocumentType || order.buyerDocumentNumber) {
+  doc.text(
+    `${order.buyerDocumentType || 'Documento'}: ${order.buyerDocumentNumber || ''}`
+  );
+}
+
+if (order.buyerTaxpayerType) {
+  doc.text(`Condición fiscal: ${order.buyerTaxpayerType}`);
+}
+
+if (order.buyerAddress) {
+  const addressLine = [
+    order.buyerAddress.streetName,
+    order.buyerAddress.streetNumber,
+    order.buyerAddress.city,
+    order.buyerAddress.stateName,
+    order.buyerAddress.zipCode
+  ]
+    .filter(Boolean)
+    .join(', ');
+
+  if (addressLine) {
+    doc.text(`Domicilio: ${addressLine}`);
+  }
+}
+
+doc.text(`Order ID MercadoLibre: ${order.orderId || 'sin order id'}`);
 
     doc.moveDown();
 

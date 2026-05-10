@@ -459,6 +459,7 @@ function normalizeOrderItemForInvoice(orderItem) {
 }
 
 function normalizeMercadoLibreOrderForInvoice(order, billingInfo = null) {
+  const parsedBillingInfo = parseBillingInfo(billingInfo);
   const items = Array.isArray(order?.order_items)
     ? order.order_items.map(normalizeOrderItemForInvoice)
     : [];
@@ -475,12 +476,29 @@ function normalizeMercadoLibreOrderForInvoice(order, billingInfo = null) {
     total: Number(order?.total_amount || totalFromItems || 0),
     paidAmount: Number(order?.paid_amount || 0),
     buyerName:
-      [order?.buyer?.first_name, order?.buyer?.last_name]
-        .filter(Boolean)
-        .join(' ') || 'Consumidor final',
+    parsedBillingInfo.fullName ||
+    [order?.buyer?.first_name, order?.buyer?.last_name]
+      .filter(Boolean)
+      .join(' ') ||
+    'Consumidor final',
+  buyerDocumentType: parsedBillingInfo.documentType,
+  buyerDocumentNumber: parsedBillingInfo.documentNumber,
+  buyerTaxpayerType: parsedBillingInfo.taxpayerType,
+  buyerTaxContributor: parsedBillingInfo.taxContributor,
+  buyerAddress: {
+    streetName: parsedBillingInfo.streetName,
+    streetNumber: parsedBillingInfo.streetNumber,
+    city: parsedBillingInfo.city,
+    stateName: parsedBillingInfo.stateName,
+    zipCode: parsedBillingInfo.zipCode,
+    countryId: parsedBillingInfo.countryId,
+    comment: parsedBillingInfo.comment
+  },
+    
     buyerId: order?.buyer?.id || null,
     buyerNickname: order?.buyer?.nickname || null,
     billingInfo,
+    parsedBillingInfo,
     items,
     raw: order
   };
@@ -501,6 +519,51 @@ async function getOrderForInvoice(orderId) {
   }
 
   return normalizeMercadoLibreOrderForInvoice(order, billingInfo);
+}
+
+function parseBillingInfo(billingInfo) {
+  const additionalInfo =
+    billingInfo?.billing_info?.additional_info ||
+    billingInfo?.additional_info ||
+    [];
+
+  const byType = {};
+
+  for (const item of additionalInfo) {
+    if (item?.type) {
+      byType[item.type] = item.value || null;
+    }
+  }
+
+  const firstName = byType.FIRST_NAME || null;
+  const lastName = byType.LAST_NAME || null;
+
+  return {
+    firstName,
+    lastName,
+    fullName: [firstName, lastName].filter(Boolean).join(' ') || null,
+    documentType:
+      billingInfo?.billing_info?.doc_type ||
+      billingInfo?.doc_type ||
+      byType.DOC_TYPE ||
+      null,
+    documentNumber:
+      billingInfo?.billing_info?.doc_number ||
+      billingInfo?.doc_number ||
+      byType.DOC_NUMBER ||
+      null,
+    taxpayerType: byType.TAXPAYER_TYPE_ID || null,
+    taxContributor: byType.TAX_CONTRIBUTOR || null,
+    city: byType.CITY_NAME || null,
+    streetName: byType.STREET_NAME || null,
+    streetNumber: byType.STREET_NUMBER || null,
+    stateCode: byType.STATE_CODE || null,
+    stateName: byType.STATE_NAME || null,
+    zipCode: byType.ZIP_CODE || null,
+    countryId: byType.COUNTRY_ID || null,
+    comment: byType.COMMENT || null,
+    raw: billingInfo || null
+  };
 }
 
 async function getItem(itemId) {
