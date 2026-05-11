@@ -19,7 +19,7 @@ async function processInvoiceJob(job) {
   const order = await getMercadoLibreOrder(job);
   const fiscalInvoice = invoiceFiscalService.buildArcaInvoiceRequestFromOrder(order);
   
-  const invoice = await arcaService.createInvoiceMock({
+  const invoice = await arcaService.createInvoice({
     job,
     order,
     fiscalInvoice
