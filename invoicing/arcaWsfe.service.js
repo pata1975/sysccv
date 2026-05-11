@@ -211,7 +211,19 @@ async function feCaeSolicitar(fiscalInvoice) {
   };
 }
 
+async function feParamGetPtosVenta() {
+  const authXml = await getAuthXml();
+
+  const bodyXml = `<FEParamGetPtosVenta xmlns="http://ar.gov.afip.dif.FEV1/">
+  ${authXml}
+</FEParamGetPtosVenta>`;
+
+  const soapXml = await callWsfeSoap('FEParamGetPtosVenta', bodyXml);
+  return parseSoapResponse(soapXml, 'FEParamGetPtosVentaResult');
+}
+
 module.exports = {
   feCompUltimoAutorizado,
-  feCaeSolicitar
+  feCaeSolicitar,
+  feParamGetPtosVenta
 };

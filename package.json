@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node app.js",
     "worker:invoice": "node workers/invoice.worker.js",
-    "arca:check-last": "node scripts/arca-check-last.js"
+    "arca:check-last": "node scripts/arca-check-last.js",
+    "arca:check-ptosventa": "node scripts/arca-check-ptosventa.js",
+    "arca:test-emit": "node scripts/arca-test-emit.js"
   },
   "dependencies": {
     "axios": "^1.8.0",
