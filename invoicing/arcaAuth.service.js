@@ -26,13 +26,13 @@ function getTicketStorePath(service) {
 }
 
 function formatXmlDate(date) {
-  return date.toISOString().replace(/\.\d{3}Z$/, '-03:00');
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function createLoginTicketRequestXml(service) {
   const now = new Date();
-  const generationTime = new Date(now.getTime() - 10 * 60 * 1000);
-  const expirationTime = new Date(now.getTime() + 10 * 60 * 60 * 1000);
+  const generationTime = new Date(now.getTime() - 5 * 60 * 1000);
+  const expirationTime = new Date(now.getTime() + 12 * 60 * 60 * 1000);
   const uniqueId = Math.floor(now.getTime() / 1000);
 
   return `<?xml version="1.0" encoding="UTF-8"?>

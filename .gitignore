@@ -7,3 +7,8 @@ dist/
 coverage/
 data/*.json
 data/invoices/
+certs/
+*.crt
+*.key
+*.pem
+.arca_tickets/
