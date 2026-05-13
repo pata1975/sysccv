@@ -18,8 +18,36 @@ function formatArcaDateForPdf(value) {
   return raw;
 }
 
+function isProductionMode() {
+  return process.env.ARCA_ENV === 'production';
+}
+
 function shouldUseRealArca() {
   return process.env.ARCA_USE_REAL === 'true';
+}
+
+function assertArcaSafety() {
+  if (!shouldUseRealArca()) {
+    return;
+  }
+
+  if (isProductionMode() && process.env.ARCA_PRODUCTION_CONFIRMED !== 'true') {
+    throw new Error(
+      'ARCA está configurado en producción, pero falta ARCA_PRODUCTION_CONFIRMED=true. No se emite para evitar facturación real accidental.'
+    );
+  }
+
+  if (!process.env.ARCA_CUIT) {
+    throw new Error('Falta configurar ARCA_CUIT');
+  }
+
+  if (!process.env.ARCA_CERT_PATH) {
+    throw new Error('Falta configurar ARCA_CERT_PATH');
+  }
+
+  if (!process.env.ARCA_KEY_PATH) {
+    throw new Error('Falta configurar ARCA_KEY_PATH');
+  }
 }
 
 async function createInvoiceMock({ job, order, fiscalInvoice }) {
@@ -76,6 +104,8 @@ async function createInvoiceReal({ job, order, fiscalInvoice }) {
 
 async function createInvoice({ job, order, fiscalInvoice }) {
   if (shouldUseRealArca()) {
+    assertArcaSafety();
+
     return createInvoiceReal({
       job,
       order,
