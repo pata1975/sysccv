@@ -3,6 +3,7 @@ require('dotenv').config();
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const FormData = require('form-data');
 
 const api = axios.create({
   baseURL: 'https://api.mercadolibre.com',
@@ -1164,12 +1165,69 @@ async function getMLData(id) {
   throw new Error('No hay ninguna implementación compatible para getMLData');
 }
 
+function resolveFiscalDocumentTargetId(order) {
+  if (!order) {
+    return null;
+  }
+
+  return order.packId || order.orderId || null;
+}
+
+async function uploadFiscalDocumentToPack(packId, filePath) {
+  if (!packId) {
+    throw new Error('No se recibió packId/orderId para uploadFiscalDocumentToPack');
+  }
+
+  if (!filePath) {
+    throw new Error('No se recibió filePath para uploadFiscalDocumentToPack');
+  }
+
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`No existe el PDF a subir: ${filePath}`);
+  }
+
+  const form = new FormData();
+
+  form.append('fiscal_document', fs.createReadStream(filePath), {
+    filename: path.basename(filePath),
+    contentType: 'application/pdf'
+  });
+
+  const { data } = await mlRequest({
+    method: 'POST',
+    url: `/packs/${packId}/fiscal_documents`,
+    data: form,
+    headers: form.getHeaders(),
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity
+  });
+
+  return data;
+}
+
+async function getFiscalDocumentsFromPack(packId) {
+  if (!packId) {
+    throw new Error('No se recibió packId/orderId para getFiscalDocumentsFromPack');
+  }
+
+  const { data } = await mlRequest({
+    method: 'GET',
+    url: `/packs/${packId}/fiscal_documents`
+  });
+
+  return data;
+}
+
 module.exports = {
   refreshMLToken,
 
   getOrderById,
   getOrderBillingInfo,
   getOrderForInvoice,
+
+  uploadFiscalDocumentToPack,
+  getFiscalDocumentsFromPack,
+  resolveFiscalDocumentTargetId,
 
   getStockEntriesFromResource,
   getStockEntriesFromItemId,
