@@ -41,13 +41,13 @@ function assertArcaSafety() {
     throw new Error('Falta configurar ARCA_CUIT');
   }
 
-  if (!process.env.ARCA_CERT_PATH) {
-    throw new Error('Falta configurar ARCA_CERT_PATH');
-  }
+  if (!process.env.ARCA_CERT_PATH && !process.env.ARCA_CERT_PEM) {
+  throw new Error('Falta configurar ARCA_CERT_PATH o ARCA_CERT_PEM');
+}
 
-  if (!process.env.ARCA_KEY_PATH) {
-    throw new Error('Falta configurar ARCA_KEY_PATH');
-  }
+if (!process.env.ARCA_KEY_PATH && !process.env.ARCA_KEY_PEM) {
+  throw new Error('Falta configurar ARCA_KEY_PATH o ARCA_KEY_PEM');
+}
 }
 
 async function createInvoiceMock({ job, order, fiscalInvoice }) {

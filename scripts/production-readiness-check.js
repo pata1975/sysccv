@@ -59,8 +59,24 @@ function main() {
     checkEnv('ARCA_INVOICE_TYPE', '11'),
     checkEnv('ML_UPLOAD_INVOICE_TO_ML', 'true'),
     checkEnv('ML_ALLOW_NON_PRODUCTION_INVOICE_UPLOAD', 'false'),
-    checkFile(process.env.ARCA_CERT_PATH, 'ARCA_CERT_PATH'),
-    checkFile(process.env.ARCA_KEY_PATH, 'ARCA_KEY_PATH')
+    {
+  label: 'ARCA_CERT_PATH o ARCA_CERT_PEM',
+  ok: !!process.env.ARCA_CERT_PEM || fs.existsSync(process.env.ARCA_CERT_PATH || ''),
+  message: process.env.ARCA_CERT_PEM
+    ? 'configurado por variable'
+    : fs.existsSync(process.env.ARCA_CERT_PATH || '')
+      ? 'existe'
+      : 'faltante'
+},
+{
+  label: 'ARCA_KEY_PATH o ARCA_KEY_PEM',
+  ok: !!process.env.ARCA_KEY_PEM || fs.existsSync(process.env.ARCA_KEY_PATH || ''),
+  message: process.env.ARCA_KEY_PEM
+    ? 'configurado por variable'
+    : fs.existsSync(process.env.ARCA_KEY_PATH || '')
+      ? 'existe'
+      : 'faltante'
+}
   ];
 
   console.log('[production readiness] Revisión de configuración');

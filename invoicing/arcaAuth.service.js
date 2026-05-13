@@ -46,7 +46,11 @@ function createLoginTicketRequestXml(service) {
 </loginTicketRequest>`;
 }
 
-async function readTextFile(filePath, label) {
+async function readTextFileOrEnv(filePath, envValue, label) {
+  if (envValue) {
+    return envValue.replace(/\\n/g, '\n');
+  }
+
   if (!filePath) {
     throw new Error(`Falta configurar ${label}`);
   }
@@ -55,9 +59,17 @@ async function readTextFile(filePath, label) {
 }
 
 async function signLoginTicketRequest(loginTicketRequestXml) {
-  const certPem = await readTextFile(process.env.ARCA_CERT_PATH, 'ARCA_CERT_PATH');
-  const keyPem = await readTextFile(process.env.ARCA_KEY_PATH, 'ARCA_KEY_PATH');
+  const certPem = await readTextFileOrEnv(
+  process.env.ARCA_CERT_PATH,
+  process.env.ARCA_CERT_PEM,
+  'ARCA_CERT_PATH o ARCA_CERT_PEM'
+);
 
+const keyPem = await readTextFileOrEnv(
+  process.env.ARCA_KEY_PATH,
+  process.env.ARCA_KEY_PEM,
+  'ARCA_KEY_PATH o ARCA_KEY_PEM'
+);
   const certificate = forge.pki.certificateFromPem(certPem);
   const privateKey = forge.pki.privateKeyFromPem(keyPem);
 
