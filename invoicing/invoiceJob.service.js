@@ -109,12 +109,38 @@ async function createPendingJob({ source, payload }) {
   };
 }
 
-async function getPendingJobs(limit = 5) {
+async function getJobById(jobId) {
   const jobs = await readJobs();
+  return jobs.find((job) => job.id === jobId) || null;
+}
+
+function getRunnableStatuses() {
+  const statuses = [
+    'pending',
+    'arca_authorized',
+    'pdf_failed',
+    'upload_pending',
+    'upload_failed'
+  ];
+
+  if (process.env.ML_UPLOAD_INVOICE_TO_ML === 'true') {
+    statuses.push('pdf_generated');
+  }
+
+  return statuses;
+}
+
+async function getRunnableJobs(limit = 5) {
+  const jobs = await readJobs();
+  const runnableStatuses = getRunnableStatuses();
 
   return jobs
-    .filter((job) => job.status === 'pending')
+    .filter((job) => runnableStatuses.includes(job.status))
     .slice(0, limit);
+}
+
+async function getPendingJobs(limit = 5) {
+  return getRunnableJobs(limit);
 }
 
 async function updateJob(jobId, patch) {
@@ -137,35 +163,89 @@ async function updateJob(jobId, patch) {
   return jobs[index];
 }
 
-async function markProcessing(jobId) {
-  const jobs = await readJobs();
-  const job = jobs.find((item) => item.id === jobId);
+async function markStatus(jobId, status, patch = {}) {
+  return updateJob(jobId, {
+    ...patch,
+    status,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+async function mergeJobResult(jobId, resultPatch) {
+  const job = await getJobById(jobId);
+
+  if (!job) {
+    throw new Error(`Invoice job not found: ${jobId}`);
+  }
+
+  const result = {
+    ...(job.result || {}),
+    ...resultPatch
+  };
 
   return updateJob(jobId, {
-    status: 'processing',
-    attempts: (job?.attempts || 0) + 1,
+    result,
+    lastError: null
+  });
+}
+
+async function incrementAttempts(jobId) {
+  const job = await getJobById(jobId);
+
+  if (!job) {
+    throw new Error(`Invoice job not found: ${jobId}`);
+  }
+
+  return updateJob(jobId, {
+    attempts: (job.attempts || 0) + 1,
+    lastError: null
+  });
+}
+
+async function setLastError(jobId, error) {
+  return updateJob(jobId, {
+    lastError: error instanceof Error ? error.message : String(error)
+  });
+}
+
+async function markStageFailed(jobId, status, error) {
+  return updateJob(jobId, {
+    status,
+    lastError: error instanceof Error ? error.message : String(error)
+  });
+}
+
+async function markProcessing(jobId) {
+  await incrementAttempts(jobId);
+
+  return markStatus(jobId, 'processing', {
     lastError: null
   });
 }
 
 async function markFailed(jobId, error) {
-  return updateJob(jobId, {
-    status: 'failed',
-    lastError: error instanceof Error ? error.message : String(error)
-  });
+  return markStageFailed(jobId, 'failed', error);
 }
 
 async function markCompleted(jobId, result) {
   return updateJob(jobId, {
-    status: 'invoiced_mock',
-    result
+    status: 'invoice_completed',
+    result,
+    lastError: null
   });
 }
 
 module.exports = {
   createPendingJob,
+  getJobById,
   getPendingJobs,
+  getRunnableJobs,
   updateJob,
+  markStatus,
+  mergeJobResult,
+  incrementAttempts,
+  setLastError,
+  markStageFailed,
   markProcessing,
   markFailed,
   markCompleted

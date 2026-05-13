@@ -2,24 +2,27 @@ const invoiceJobService = require('../invoicing/invoiceJob.service');
 const mercadolibreInvoiceService = require('../invoicing/mercadolibreInvoice.service');
 
 async function runInvoiceWorker() {
-  const pendingJobs = await invoiceJobService.getPendingJobs(5);
+  const runnableJobs = await invoiceJobService.getRunnableJobs(5);
 
-  if (pendingJobs.length === 0) {
-    console.log('[invoice worker] No pending jobs');
+  if (runnableJobs.length === 0) {
+    console.log('[invoice worker] No runnable jobs');
     return;
   }
 
-  for (const job of pendingJobs) {
+  for (const job of runnableJobs) {
     try {
-      console.log(`[invoice worker] Processing job ${job.id}`);
+      console.log(`[invoice worker] Processing job ${job.id}`, {
+        status: job.status,
+        attempts: job.attempts || 0
+      });
 
-      await invoiceJobService.markProcessing(job.id);
+      await mercadolibreInvoiceService.processInvoiceJob(job);
 
-      const result = await mercadolibreInvoiceService.processInvoiceJob(job);
+      const updatedJob = await invoiceJobService.getJobById(job.id);
 
-      await invoiceJobService.markCompleted(job.id, result);
-
-      console.log(`[invoice worker] Completed job ${job.id}`);
+      console.log(`[invoice worker] Finished job ${job.id}`, {
+        status: updatedJob?.status || null
+      });
     } catch (error) {
       console.error(`[invoice worker] Failed job ${job.id}`, {
         message: error?.message,
@@ -28,7 +31,7 @@ async function runInvoiceWorker() {
         code: error?.code || null
       });
 
-      await invoiceJobService.markFailed(job.id, error);
+      await invoiceJobService.setLastError(job.id, error);
     }
   }
 }
@@ -39,7 +42,13 @@ if (require.main === module) {
       process.exit(0);
     })
     .catch((error) => {
-      console.error('[invoice worker] Fatal error', error);
+      console.error('[invoice worker] Fatal error', {
+        message: error?.message,
+        status: error?.response?.status || null,
+        data: error?.response?.data || null,
+        code: error?.code || null
+      });
+
       process.exit(1);
     });
 }
