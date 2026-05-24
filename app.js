@@ -6,6 +6,7 @@ const mlService = require('./services/mlibre');
 const tnService = require('./services/tnube');
 const mercadolibreWebhookRoutes = require('./routes/mercadolibreWebhook.routes');
 const invoiceJobService = require('./invoicing/invoiceJob.service');
+const { runInvoiceWorker } = require('./workers/invoice.worker');
 
 const app = express();
 
@@ -18,37 +19,6 @@ app.use((req, res, next) => {
 });
 
 app.use('/webhooks/mercadolibre', mercadolibreWebhookRoutes);
-
-app.get('/debug/invoice-jobs', async (req, res) => {
-  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
-    return res.status(404).json({ ok: false });
-  }
-
-  try {
-    const jobs = await invoiceJobService.getRunnableJobs(50);
-
-    return res.json({
-      ok: true,
-      count: jobs.length,
-      jobs: jobs.map((job) => ({
-        id: job.id,
-        status: job.status,
-        orderId: job.orderId,
-        updatedAt: job.updatedAt
-      }))
-    });
-  } catch (error) {
-    console.error('[debug invoice jobs] Error:', {
-      message: error?.message,
-      code: error?.code || null
-    });
-
-    return res.status(500).json({
-      ok: false,
-      error: 'Could not read invoice jobs'
-    });
-  }
-});
 
 function normalizeStock(value) {
   if (value === '' || value === null || value === undefined) return 0;
@@ -166,6 +136,43 @@ async function syncTnVariantToML(variant) {
 
   console.log(`[TN -> ML] SKU ${sku} sincronizado ${mlStock} -> ${tnStock}.`);
 }
+
+app.get('/debug/invoice-jobs', async (req, res) => {
+  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
+    return res.status(404).json({ ok: false });
+  }
+
+  try {
+    const jobs = typeof invoiceJobService.getAllJobs === 'function'
+      ? await invoiceJobService.getAllJobs(50)
+      : await invoiceJobService.getRunnableJobs(50);
+
+    return res.json({
+      ok: true,
+      count: jobs.length,
+      jobs: jobs.map((job) => ({
+        id: job.id,
+        status: job.status,
+        orderId: job.orderId,
+        attempts: job.attempts || 0,
+        updatedAt: job.updatedAt,
+        hasInvoice: !!job.result?.invoice || !!job.result?.cae,
+        hasPdf: !!job.result?.pdf?.filePath || !!job.result?.pdfFilePath,
+        uploadedToMercadoLibre: !!job.result?.mercadoLibreUpload?.uploadedAt
+      }))
+    });
+  } catch (error) {
+    console.error('[debug invoice jobs] Error:', {
+      message: error?.message,
+      code: error?.code || null
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: 'Could not read invoice jobs'
+    });
+  }
+});
 
 app.post('/webhooks/ml', async (req, res) => {
   console.log('[ML webhook] entró');
@@ -296,6 +303,48 @@ app.post('/webhooks/tn', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({ ok: true });
 });
+
+let invoiceWorkerRunning = false;
+
+function startInvoiceWorkerScheduler() {
+  if (process.env.INVOICE_WORKER_ENABLED !== 'true') {
+    console.log('[invoice worker scheduler] Disabled');
+    return;
+  }
+
+  const intervalMs = Number(process.env.INVOICE_WORKER_INTERVAL_MS || 300000);
+
+  console.log('[invoice worker scheduler] Enabled', {
+    intervalMs
+  });
+
+  const runSafely = async () => {
+    if (invoiceWorkerRunning) {
+      console.log('[invoice worker scheduler] Previous run still active. Skipping.');
+      return;
+    }
+
+    invoiceWorkerRunning = true;
+
+    try {
+      await runInvoiceWorker();
+    } catch (error) {
+      console.error('[invoice worker scheduler] Error', {
+        message: error?.message,
+        status: error?.response?.status || null,
+        data: error?.response?.data || null,
+        code: error?.code || null
+      });
+    } finally {
+      invoiceWorkerRunning = false;
+    }
+  };
+
+  setTimeout(runSafely, 10000);
+  setInterval(runSafely, intervalMs);
+}
+
+startInvoiceWorkerScheduler();
 
 const PORT = process.env.PORT || 3000;
 

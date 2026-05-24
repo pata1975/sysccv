@@ -2,7 +2,10 @@ const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_DIR = process.env.INVOICE_DATA_DIR
+  ? path.resolve(process.env.INVOICE_DATA_DIR)
+  : path.join(__dirname, '..', 'data');
+
 const JOBS_FILE = path.join(DATA_DIR, 'invoiceJobs.json');
 
 async function ensureStore() {
@@ -235,6 +238,14 @@ async function markCompleted(jobId, result) {
   });
 }
 
+async function getAllJobs(limit = 50) {
+  const jobs = await readJobs();
+
+  return jobs
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+    .slice(0, limit);
+}
+
 module.exports = {
   createPendingJob,
   getJobById,
@@ -248,5 +259,6 @@ module.exports = {
   markStageFailed,
   markProcessing,
   markFailed,
-  markCompleted
+  markCompleted,
+  getAllJobs
 };
