@@ -5,6 +5,7 @@ const mlService = require('./services/mlibre');
 const tnService = require('./services/tnube');
 const mercadolibreWebhookRoutes = require('./routes/mercadolibreWebhook.routes');
 const app = express();
+const invoiceJobService = require('./invoicing/invoiceJob.service');
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -111,10 +112,74 @@ app.post('/webhooks/ml', async (req, res) => {
   console.log('[ML webhook] query:', req.query);
   console.log('[ML webhook] body:', req.body);
 
+  const event = req.body || {};
+const topic = event.topic || req.query.topic || null;
+const resource = event.resource || req.query.resource || null;
+
+if (
+  topic === 'orders_v2' &&
+  typeof resource === 'string' &&
+  resource.includes('/orders/')
+) {
+  const result = await invoiceJobService.createPendingJob({
+    source: 'mercadolibre',
+    payload: {
+      ...event,
+      topic,
+      resource
+    }
+  });
+
+  console.log('[ML webhook] Invoice job creado o existente:', {
+    created: result.created,
+    jobId: result.job.id,
+    status: result.job.status
+  });
+
+  return res.status(200).json({
+    ok: true,
+    created: result.created,
+    jobId: result.job.id,
+    status: result.job.status
+  });
+}
+
   res.sendStatus(200);
 
   const resource = req.body?.resource || req.query?.resource;
   const topic = req.body?.topic || req.query?.topic || req.body?.type;
+
+  const event = req.body || {};
+const topic = event.topic || req.query.topic || null;
+const resource = event.resource || req.query.resource || null;
+
+if (
+  topic === 'orders_v2' &&
+  typeof resource === 'string' &&
+  resource.includes('/orders/')
+) {
+  const result = await invoiceJobService.createPendingJob({
+    source: 'mercadolibre',
+    payload: {
+      ...event,
+      topic,
+      resource
+    }
+  });
+
+  console.log('[ML webhook] Invoice job creado o existente:', {
+    created: result.created,
+    jobId: result.job.id,
+    status: result.job.status
+  });
+
+  return res.status(200).json({
+    ok: true,
+    created: result.created,
+    jobId: result.job.id,
+    status: result.job.status
+  });
+}
 
   if (!resource || !['items', 'stock-locations', 'user-products'].includes(topic)) {
     console.log('[ML webhook] Evento ignorado:', { topic, resource });
