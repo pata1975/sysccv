@@ -112,58 +112,21 @@ app.post('/webhooks/ml', async (req, res) => {
   console.log('[ML webhook] query:', req.query);
   console.log('[ML webhook] body:', req.body);
 
-  const event = req.body || {};
-const topic = event.topic || req.query.topic || null;
-const resource = event.resource || req.query.resource || null;
+  const invoiceEvent = req.body || {};
+const invoiceTopic = invoiceEvent.topic || req.query.topic || null;
+const invoiceResource = invoiceEvent.resource || req.query.resource || null;
 
 if (
-  topic === 'orders_v2' &&
-  typeof resource === 'string' &&
-  resource.includes('/orders/')
+  invoiceTopic === 'orders_v2' &&
+  typeof invoiceResource === 'string' &&
+  invoiceResource.includes('/orders/')
 ) {
   const result = await invoiceJobService.createPendingJob({
     source: 'mercadolibre',
     payload: {
-      ...event,
-      topic,
-      resource
-    }
-  });
-
-  console.log('[ML webhook] Invoice job creado o existente:', {
-    created: result.created,
-    jobId: result.job.id,
-    status: result.job.status
-  });
-
-  return res.status(200).json({
-    ok: true,
-    created: result.created,
-    jobId: result.job.id,
-    status: result.job.status
-  });
-}
-
-  res.sendStatus(200);
-
-  const resource = req.body?.resource || req.query?.resource;
-  const topic = req.body?.topic || req.query?.topic || req.body?.type;
-
-  const event = req.body || {};
-const topic = event.topic || req.query.topic || null;
-const resource = event.resource || req.query.resource || null;
-
-if (
-  topic === 'orders_v2' &&
-  typeof resource === 'string' &&
-  resource.includes('/orders/')
-) {
-  const result = await invoiceJobService.createPendingJob({
-    source: 'mercadolibre',
-    payload: {
-      ...event,
-      topic,
-      resource
+      ...invoiceEvent,
+      topic: invoiceTopic,
+      resource: invoiceResource
     }
   });
 
