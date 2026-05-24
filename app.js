@@ -156,6 +156,7 @@ app.get('/debug/invoice-jobs', async (req, res) => {
         orderId: job.orderId,
         attempts: job.attempts || 0,
         updatedAt: job.updatedAt,
+        lastError: job.lastError || null,
         hasInvoice: !!job.result?.invoice || !!job.result?.cae,
         hasPdf: !!job.result?.pdf?.filePath || !!job.result?.pdfFilePath,
         uploadedToMercadoLibre: !!job.result?.mercadoLibreUpload?.uploadedAt

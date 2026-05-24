@@ -120,6 +120,7 @@ async function getJobById(jobId) {
 function getRunnableStatuses() {
   const statuses = [
     'pending',
+    'arca_failed',
     'arca_authorized',
     'pdf_failed',
     'upload_pending',
