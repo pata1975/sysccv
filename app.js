@@ -7,6 +7,7 @@ const tnService = require('./services/tnube');
 const mercadolibreWebhookRoutes = require('./routes/mercadolibreWebhook.routes');
 const invoiceJobService = require('./invoicing/invoiceJob.service');
 const { runInvoiceWorker } = require('./workers/invoice.worker');
+const arcaWsfeService = require('./invoicing/arcaWsfe.service');
 
 const app = express();
 
