@@ -302,6 +302,46 @@ app.post('/webhooks/tn', async (req, res) => {
   }
 });
 
+app.get('/debug/arca-last', async (req, res) => {
+  if (process.env.DEBUG_ARCA_CHECKS !== 'true') {
+    return res.status(404).json({ ok: false });
+  }
+
+  try {
+    const pointOfSale = Number(process.env.ARCA_POINT_OF_SALE || 1);
+    const invoiceType = Number(process.env.ARCA_INVOICE_TYPE || 11);
+
+    const result = await arcaWsfeService.feCompUltimoAutorizado({
+      pointOfSale,
+      invoiceType
+    });
+
+    return res.json({
+      ok: true,
+      env: process.env.ARCA_ENV || null,
+      cuitConfigured: !!process.env.ARCA_CUIT,
+      pointOfSale,
+      invoiceType,
+      result
+    });
+  } catch (error) {
+    console.error('[debug arca last] Error:', {
+      message: error?.message,
+      status: error?.response?.status || null,
+      data: error?.response?.data || null,
+      details: error?.details || null
+    });
+
+    return res.status(500).json({
+      ok: false,
+      message: error?.message,
+      status: error?.response?.status || null,
+      data: error?.response?.data || null,
+      details: error?.details || null
+    });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.status(200).json({ ok: true });
 });
