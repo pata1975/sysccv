@@ -232,22 +232,26 @@ app.get('/debug/invoice-jobs', async (req, res) => {
       ok: true,
       count: jobs.length,
       jobs: jobs.map((job) => ({
-        id: job.id,
-        status: job.status,
-        orderId: job.orderId,
-        attempts: job.attempts || 0,
-        updatedAt: job.updatedAt,
-        lastError: job.lastError || null,
-        hasInvoice: !!job.result?.invoice || !!job.result?.cae,
-        hasPdf: !!job.result?.pdf?.filePath || !!job.result?.pdfFilePath,
-        pdfFilePath: job.result?.pdf?.filePath || job.result?.pdfFilePath || null,
-        pdfFileName: job.result?.pdf?.fileName || job.result?.pdfFileName || null,
-        invoiceNumber: job.result?.invoice?.invoiceNumber || job.result?.invoiceNumber || null,
-        pointOfSale: job.result?.invoice?.pointOfSale || job.result?.pointOfSale || null,
-        cae: job.result?.invoice?.cae || job.result?.cae || null,
-        issuedAt: job.result?.invoice?.issuedAt || job.result?.issuedAt || null,
-        uploadedToMercadoLibre: !!job.result?.mercadoLibreUpload?.uploadedAt
-      }))
+      id: job.id,
+      status: job.status,
+      orderId: job.orderId,
+      attempts: job.attempts || 0,
+      updatedAt: job.updatedAt,
+      lastError: job.lastError || null,
+
+      hasInvoice: !!job.result?.invoice || !!job.result?.cae,
+      pointOfSale: job.result?.invoice?.pointOfSale || job.result?.pointOfSale || null,
+      invoiceNumber: job.result?.invoice?.invoiceNumber || job.result?.invoiceNumber || null,
+      cae: job.result?.invoice?.cae || job.result?.cae || null,
+      caeDueDate: job.result?.invoice?.caeDueDate || job.result?.caeDueDate || null,
+      issuedAt: job.result?.invoice?.issuedAt || job.result?.issuedAt || null,
+
+      hasPdf: !!job.result?.pdf?.filePath || !!job.result?.pdfFilePath,
+      pdfFileName: job.result?.pdf?.fileName || job.result?.pdfFileName || null,
+      pdfFilePath: job.result?.pdf?.filePath || job.result?.pdfFilePath || null,
+
+      uploadedToMercadoLibre: !!job.result?.mercadoLibreUpload?.uploadedAt
+    }))
     });
   } catch (error) {
     console.error('[debug invoice jobs] Error:', {
@@ -733,6 +737,53 @@ app.get('/admin/invoices/:fileName', async (req, res) => {
       return res.status(400).json({
         ok: false,
         error: 'Only PDF files are allowed'
+      });
+    }
+
+    await fs.access(filePath);
+
+    return res.download(filePath, fileName);
+  } catch (error) {
+    return res.status(404).json({
+      ok: false,
+      error: error?.message || 'Invoice PDF not found'
+    });
+  }
+});
+
+app.get('/admin/invoice-jobs/:jobId/pdf', async (req, res) => {
+  if (!checkInvoiceAdminAuth(req, res)) {
+    return;
+  }
+
+  try {
+    const { jobId } = req.params;
+    const job = await invoiceJobService.getJobById(jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Job not found'
+      });
+    }
+
+    const filePath = job.result?.pdf?.filePath || job.result?.pdfFilePath || null;
+    const fileName =
+      job.result?.pdf?.fileName ||
+      job.result?.pdfFileName ||
+      `factura-${job.id}.pdf`;
+
+    if (!filePath) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Job has no PDF file path'
+      });
+    }
+
+    if (!fileName.toLowerCase().endsWith('.pdf')) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Invalid PDF file name'
       });
     }
 
