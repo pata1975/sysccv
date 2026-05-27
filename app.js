@@ -240,6 +240,12 @@ app.get('/debug/invoice-jobs', async (req, res) => {
         lastError: job.lastError || null,
         hasInvoice: !!job.result?.invoice || !!job.result?.cae,
         hasPdf: !!job.result?.pdf?.filePath || !!job.result?.pdfFilePath,
+        pdfFilePath: job.result?.pdf?.filePath || job.result?.pdfFilePath || null,
+        pdfFileName: job.result?.pdf?.fileName || job.result?.pdfFileName || null,
+        invoiceNumber: job.result?.invoice?.invoiceNumber || job.result?.invoiceNumber || null,
+        pointOfSale: job.result?.invoice?.pointOfSale || job.result?.pointOfSale || null,
+        cae: job.result?.invoice?.cae || job.result?.cae || null,
+        issuedAt: job.result?.invoice?.issuedAt || job.result?.issuedAt || null,
         uploadedToMercadoLibre: !!job.result?.mercadoLibreUpload?.uploadedAt
       }))
     });
@@ -689,6 +695,8 @@ app.get('/admin/invoices', async (req, res) => {
 
   try {
     const invoicesDir = process.env.INVOICE_PDF_DIR || path.join(__dirname, 'data', 'invoices');
+
+    await fs.mkdir(invoicesDir, { recursive: true });
 
     const files = await fs.readdir(invoicesDir);
 
