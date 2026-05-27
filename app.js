@@ -1,6 +1,8 @@
 require('dotenv').config();
 
 const express = require('express');
+const fs = require('fs/promises');
+const path = require('path');
 
 const mlService = require('./services/mlibre');
 const tnService = require('./services/tnube');
@@ -9,6 +11,7 @@ const invoiceJobService = require('./invoicing/invoiceJob.service');
 const mercadolibreInvoiceService = require('./invoicing/mercadolibreInvoice.service');
 const { runInvoiceWorker } = require('./workers/invoice.worker');
 const arcaWsfeService = require('./invoicing/arcaWsfe.service');
+const axios = require('axios');
 
 const app = express();
 
@@ -590,6 +593,55 @@ app.post('/webhooks/tn', async (req, res) => {
   }
 });
 
+app.get('/debug/ml-me-direct', async (req, res) => {
+  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
+    return res.status(404).json({ ok: false });
+  }
+
+  try {
+    const accessToken = String(process.env.ML_ACCESS_TOKEN || '').trim();
+
+    if (!accessToken) {
+      return res.status(500).json({
+        ok: false,
+        error: 'ML_ACCESS_TOKEN no configurado'
+      });
+    }
+
+    const response = await axios.get('https://api.mercadolibre.com/users/me', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json'
+      },
+      timeout: 30000
+    });
+
+    return res.json({
+      ok: true,
+      user: {
+        id: response.data?.id,
+        nickname: response.data?.nickname,
+        site_id: response.data?.site_id,
+        status: response.data?.status
+      }
+    });
+  } catch (error) {
+    const rawData = error?.response?.data;
+
+    return res.status(500).json({
+      ok: false,
+      message: error?.message,
+      status: error?.response?.status || null,
+      contentType: error?.response?.headers?.['content-type'] || null,
+      dataPreview:
+        typeof rawData === 'string'
+          ? rawData.slice(0, 1000)
+          : rawData || null,
+      code: error?.code || null
+    });
+  }
+});
+
 app.get('/debug/arca-last', async (req, res) => {
   if (process.env.DEBUG_ARCA_CHECKS !== 'true') {
     return res.status(404).json({ ok: false });
@@ -626,6 +678,63 @@ app.get('/debug/arca-last', async (req, res) => {
       status: error?.response?.status || null,
       data: error?.response?.data || null,
       details: error?.details || null
+    });
+  }
+});
+
+app.get('/admin/invoices', async (req, res) => {
+  if (!checkInvoiceAdminAuth(req, res)) {
+    return;
+  }
+
+  try {
+    const invoicesDir = process.env.INVOICE_PDF_DIR || path.join(__dirname, 'data', 'invoices');
+
+    const files = await fs.readdir(invoicesDir);
+
+    const pdfs = files
+      .filter((file) => file.toLowerCase().endsWith('.pdf'))
+      .sort()
+      .reverse();
+
+    return res.json({
+      ok: true,
+      invoicesDir,
+      count: pdfs.length,
+      files: pdfs
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error?.message || 'Could not list invoices'
+    });
+  }
+});
+
+app.get('/admin/invoices/:fileName', async (req, res) => {
+  if (!checkInvoiceAdminAuth(req, res)) {
+    return;
+  }
+
+  try {
+    const invoicesDir = process.env.INVOICE_PDF_DIR || path.join(__dirname, 'data', 'invoices');
+    const fileName = path.basename(req.params.fileName);
+    const filePath = path.join(invoicesDir, fileName);
+
+    if (!fileName.toLowerCase().endsWith('.pdf')) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Only PDF files are allowed'
+      });
+    }
+
+    await fs.access(filePath);
+
+    return res.download(filePath, fileName);
+  } catch (error) {
+    return res.status(404).json({
+      ok: false,
+      error: error?.message || 'Invoice PDF not found'
     });
   }
 });
