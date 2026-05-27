@@ -6,9 +6,9 @@ const mlService = require('./services/mlibre');
 const tnService = require('./services/tnube');
 const mercadolibreWebhookRoutes = require('./routes/mercadolibreWebhook.routes');
 const invoiceJobService = require('./invoicing/invoiceJob.service');
+const mercadolibreInvoiceService = require('./invoicing/mercadolibreInvoice.service');
 const { runInvoiceWorker } = require('./workers/invoice.worker');
 const arcaWsfeService = require('./invoicing/arcaWsfe.service');
-const mercadolibreInvoiceService = require('./invoicing/mercadolibreInvoice.service');
 
 const app = express();
 
@@ -27,6 +27,16 @@ function normalizeStock(value) {
 
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function getErrorPreview(error, maxLength = 800) {
+  const rawData = error?.response?.data;
+
+  if (typeof rawData === 'string') {
+    return rawData.slice(0, maxLength);
+  }
+
+  return rawData || null;
 }
 
 function extractMlIdFromResource(resource) {
@@ -139,6 +149,72 @@ async function syncTnVariantToML(variant) {
   console.log(`[TN -> ML] SKU ${sku} sincronizado ${mlStock} -> ${tnStock}.`);
 }
 
+let invoiceWorkerRunning = false;
+
+async function runInvoiceWorkerSafely(context = 'manual') {
+  if (invoiceWorkerRunning) {
+    console.log('[invoice worker] Previous run still active. Skipping.', {
+      context
+    });
+    return;
+  }
+
+  invoiceWorkerRunning = true;
+
+  try {
+    await runInvoiceWorker();
+  } catch (error) {
+    console.error('[invoice worker] Error', {
+      context,
+      message: error?.message,
+      status: error?.response?.status || null,
+      data: error?.response?.data || null,
+      code: error?.code || null
+    });
+  } finally {
+    invoiceWorkerRunning = false;
+  }
+}
+
+function startInvoiceWorkerScheduler() {
+  if (process.env.INVOICE_WORKER_ENABLED !== 'true') {
+    console.log('[invoice worker scheduler] Disabled');
+    return;
+  }
+
+  const intervalMs = Number(process.env.INVOICE_WORKER_INTERVAL_MS || 300000);
+
+  console.log('[invoice worker scheduler] Enabled', {
+    intervalMs
+  });
+
+  setTimeout(() => {
+    runInvoiceWorkerSafely('startup-delay');
+  }, 10000);
+
+  setInterval(() => {
+    runInvoiceWorkerSafely('interval');
+  }, intervalMs);
+}
+
+function checkInvoiceAdminAuth(req, res) {
+  const expectedToken = process.env.INVOICE_ADMIN_TOKEN;
+
+  if (!expectedToken) {
+    res.status(404).json({ ok: false });
+    return false;
+  }
+
+  const receivedToken = req.headers['x-invoice-admin-token'];
+
+  if (receivedToken !== expectedToken) {
+    res.status(403).json({ ok: false, error: 'Forbidden' });
+    return false;
+  }
+
+  return true;
+}
+
 app.get('/debug/invoice-jobs', async (req, res) => {
   if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
     return res.status(404).json({ ok: false });
@@ -177,6 +253,211 @@ app.get('/debug/invoice-jobs', async (req, res) => {
   }
 });
 
+app.get('/debug/ml-config', async (req, res) => {
+  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
+    return res.status(404).json({ ok: false });
+  }
+
+  return res.json({
+    ok: true,
+    mlUserIdConfigured: process.env.ML_USER_ID || null,
+    hasClientId: !!process.env.ML_CLIENT_ID,
+    hasClientSecret: !!process.env.ML_CLIENT_SECRET,
+    hasAccessToken: !!process.env.ML_ACCESS_TOKEN,
+    hasRefreshToken: !!process.env.ML_REFRESH_TOKEN,
+    tokenStorePath: process.env.ML_TOKEN_STORE_PATH || null
+  });
+});
+
+app.get('/debug/ml-me', async (req, res) => {
+  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
+    return res.status(404).json({ ok: false });
+  }
+
+  try {
+    const data = await mlService.getMLAuthenticatedUserDebug();
+
+    return res.json({
+      ok: true,
+      user: data
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      message: error?.message,
+      status: error?.response?.status || null,
+      contentType: error?.response?.headers?.['content-type'] || null,
+      dataPreview: getErrorPreview(error, 800),
+      code: error?.code || null
+    });
+  }
+});
+
+app.get('/debug/ml-order-raw/:orderId', async (req, res) => {
+  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
+    return res.status(404).json({ ok: false });
+  }
+
+  try {
+    const data = await mlService.getOrderById(req.params.orderId);
+
+    return res.json({
+      ok: true,
+      order: {
+        id: data?.id,
+        status: data?.status,
+        pack_id: data?.pack_id || null,
+        seller: data?.seller
+          ? {
+              id: data.seller.id,
+              nickname: data.seller.nickname
+            }
+          : null,
+        buyer: data?.buyer
+          ? {
+              id: data.buyer.id,
+              nickname: data.buyer.nickname
+            }
+          : null,
+        total_amount: data?.total_amount,
+        order_items_count: Array.isArray(data?.order_items)
+          ? data.order_items.length
+          : 0
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      step: 'getOrderById',
+      message: error?.message,
+      status: error?.response?.status || null,
+      contentType: error?.response?.headers?.['content-type'] || null,
+      dataPreview: getErrorPreview(error, 1000),
+      code: error?.code || null
+    });
+  }
+});
+
+app.get('/debug/ml-order-billing/:orderId', async (req, res) => {
+  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
+    return res.status(404).json({ ok: false });
+  }
+
+  try {
+    const data = await mlService.getOrderBillingInfo(req.params.orderId);
+
+    return res.json({
+      ok: true,
+      hasBillingInfo: !!data,
+      keys: data && typeof data === 'object' ? Object.keys(data) : []
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      step: 'getOrderBillingInfo',
+      message: error?.message,
+      status: error?.response?.status || null,
+      contentType: error?.response?.headers?.['content-type'] || null,
+      dataPreview: getErrorPreview(error, 1000),
+      code: error?.code || null
+    });
+  }
+});
+
+app.post('/admin/invoice-jobs/:jobId/status', async (req, res) => {
+  if (!checkInvoiceAdminAuth(req, res)) {
+    return;
+  }
+
+  try {
+    const { jobId } = req.params;
+    const { status } = req.body || {};
+
+    if (!status) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Missing status'
+      });
+    }
+
+    const job = await invoiceJobService.markStatus(jobId, status);
+
+    return res.json({
+      ok: true,
+      job: {
+        id: job.id,
+        status: job.status,
+        orderId: job.orderId,
+        updatedAt: job.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('[admin invoice jobs] Error changing status:', {
+      message: error?.message,
+      code: error?.code || null
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: error?.message || 'Could not update job status'
+    });
+  }
+});
+
+app.post('/admin/invoice-jobs/:jobId/process', async (req, res) => {
+  if (!checkInvoiceAdminAuth(req, res)) {
+    return;
+  }
+
+  try {
+    const { jobId } = req.params;
+
+    const job = await invoiceJobService.getJobById(jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Job not found'
+      });
+    }
+
+    await mercadolibreInvoiceService.processInvoiceJob(job);
+
+    const updatedJob = await invoiceJobService.getJobById(jobId);
+
+    return res.json({
+      ok: true,
+      job: {
+        id: updatedJob.id,
+        status: updatedJob.status,
+        orderId: updatedJob.orderId,
+        attempts: updatedJob.attempts || 0,
+        updatedAt: updatedJob.updatedAt,
+        lastError: updatedJob.lastError || null,
+        hasInvoice: !!updatedJob.result?.invoice || !!updatedJob.result?.cae,
+        hasPdf: !!updatedJob.result?.pdf?.filePath || !!updatedJob.result?.pdfFilePath,
+        uploadedToMercadoLibre: !!updatedJob.result?.mercadoLibreUpload?.uploadedAt
+      }
+    });
+  } catch (error) {
+    console.error('[admin invoice jobs] Error processing job:', {
+      message: error?.message,
+      status: error?.response?.status || null,
+      data: error?.response?.data || null,
+      code: error?.code || null,
+      details: error?.details || null
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: error?.message || 'Could not process job',
+      status: error?.response?.status || null,
+      data: error?.response?.data || null,
+      details: error?.details || null
+    });
+  }
+});
+
 app.post('/webhooks/ml', async (req, res) => {
   console.log('[ML webhook] entró');
   console.log('[ML webhook] content-type:', req.headers['content-type']);
@@ -207,6 +488,12 @@ app.post('/webhooks/ml', async (req, res) => {
         jobId: result.job.id,
         status: result.job.status
       });
+
+      if (process.env.INVOICE_WORKER_ENABLED === 'true') {
+        setTimeout(() => {
+          runInvoiceWorkerSafely('webhook');
+        }, 3000);
+      }
 
       return res.status(200).json({
         ok: true,
@@ -303,276 +590,6 @@ app.post('/webhooks/tn', async (req, res) => {
   }
 });
 
-function checkInvoiceAdminAuth(req, res) {
-  const expectedToken = process.env.INVOICE_ADMIN_TOKEN;
-
-  if (!expectedToken) {
-    res.status(404).json({ ok: false });
-    return false;
-  }
-
-  const receivedToken = req.headers['x-invoice-admin-token'];
-
-  if (receivedToken !== expectedToken) {
-    res.status(403).json({ ok: false, error: 'Forbidden' });
-    return false;
-  }
-
-  return true;
-}
-
-app.post('/admin/invoice-jobs/:jobId/status', async (req, res) => {
-  if (!checkInvoiceAdminAuth(req, res)) {
-    return;
-  }
-
-  try {
-    const { jobId } = req.params;
-    const { status } = req.body || {};
-
-    if (!status) {
-      return res.status(400).json({
-        ok: false,
-        error: 'Missing status'
-      });
-    }
-
-    const job = await invoiceJobService.markStatus(jobId, status);
-
-    return res.json({
-      ok: true,
-      job: {
-        id: job.id,
-        status: job.status,
-        orderId: job.orderId,
-        updatedAt: job.updatedAt
-      }
-    });
-  } catch (error) {
-    console.error('[admin invoice jobs] Error changing status:', {
-      message: error?.message,
-      code: error?.code || null
-    });
-
-    return res.status(500).json({
-      ok: false,
-      error: error?.message || 'Could not update job status'
-    });
-  }
-});
-
-app.post('/admin/invoice-jobs/:jobId/process', async (req, res) => {
-  if (!checkInvoiceAdminAuth(req, res)) {
-    return;
-  }
-
-  try {
-    const { jobId } = req.params;
-
-    const job = await invoiceJobService.getJobById(jobId);
-
-    if (!job) {
-      return res.status(404).json({
-        ok: false,
-        error: 'Job not found'
-      });
-    }
-
-    await mercadolibreInvoiceService.processInvoiceJob(job);
-
-    const updatedJob = await invoiceJobService.getJobById(jobId);
-
-    return res.json({
-      ok: true,
-      job: {
-        id: updatedJob.id,
-        status: updatedJob.status,
-        orderId: updatedJob.orderId,
-        attempts: updatedJob.attempts || 0,
-        updatedAt: updatedJob.updatedAt,
-        lastError: updatedJob.lastError || null,
-        hasInvoice: !!updatedJob.result?.invoice || !!updatedJob.result?.cae,
-        hasPdf: !!updatedJob.result?.pdf?.filePath || !!updatedJob.result?.pdfFilePath,
-        uploadedToMercadoLibre: !!updatedJob.result?.mercadoLibreUpload?.uploadedAt
-      }
-    });
-  } catch (error) {
-    console.error('[admin invoice jobs] Error processing job:', {
-      message: error?.message,
-      status: error?.response?.status || null,
-      data: error?.response?.data || null,
-      code: error?.code || null,
-      details: error?.details || null
-    });
-
-    return res.status(500).json({
-      ok: false,
-      error: error?.message || 'Could not process job',
-      status: error?.response?.status || null,
-      data: error?.response?.data || null,
-      details: error?.details || null
-    });
-  }
-});
-
-app.get('/debug/ml-order/:orderId', async (req, res) => {
-  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
-    return res.status(404).json({ ok: false });
-  }
-
-  try {
-    const order = await mlService.getOrderForInvoice(req.params.orderId);
-
-    return res.json({
-      ok: true,
-      order: {
-        orderId: order.orderId,
-        packId: order.packId,
-        status: order.status,
-        buyerName: order.buyerName,
-        total: order.total,
-        currency: order.currency,
-        itemsCount: Array.isArray(order.items) ? order.items.length : 0,
-        hasBillingInfo: !!order.billingInfo
-      }
-    });
-  } catch (error) {
-    const rawData = error?.response?.data;
-    const dataPreview =
-      typeof rawData === 'string'
-        ? rawData.slice(0, 500)
-        : rawData || null;
-
-    console.error('[debug ml order] Error:', {
-      message: error?.message,
-      status: error?.response?.status || null,
-      dataPreview,
-      code: error?.code || null
-    });
-
-    return res.status(500).json({
-      ok: false,
-      message: error?.message,
-      status: error?.response?.status || null,
-      dataPreview,
-      code: error?.code || null
-    });
-  }
-});
-
-
-app.get('/debug/ml-me', async (req, res) => {
-  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
-    return res.status(404).json({ ok: false });
-  }
-
-  try {
-    const data = await mlService.getMLAuthenticatedUserDebug();
-
-    return res.json({
-      ok: true,
-      user: data
-    });
-  } catch (error) {
-    const rawData = error?.response?.data;
-    const dataPreview =
-      typeof rawData === 'string'
-        ? rawData.slice(0, 500)
-        : rawData || null;
-
-    return res.status(500).json({
-      ok: false,
-      message: error?.message,
-      status: error?.response?.status || null,
-      dataPreview,
-      code: error?.code || null
-    });
-  }
-});
-
-app.get('/debug/ml-order-raw/:orderId', async (req, res) => {
-  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
-    return res.status(404).json({ ok: false });
-  }
-
-  try {
-    const data = await mlService.getOrderById(req.params.orderId);
-
-    return res.json({
-      ok: true,
-      order: {
-        id: data?.id,
-        status: data?.status,
-        pack_id: data?.pack_id || null,
-        seller: data?.seller
-          ? {
-              id: data.seller.id,
-              nickname: data.seller.nickname
-            }
-          : null,
-        buyer: data?.buyer
-          ? {
-              id: data.buyer.id,
-              nickname: data.buyer.nickname
-            }
-          : null,
-        total_amount: data?.total_amount,
-        order_items_count: Array.isArray(data?.order_items)
-          ? data.order_items.length
-          : 0
-      }
-    });
-  } catch (error) {
-    const rawData = error?.response?.data;
-    const dataPreview =
-      typeof rawData === 'string'
-        ? rawData.slice(0, 800)
-        : rawData || null;
-
-    return res.status(500).json({
-      ok: false,
-      step: 'getOrderById',
-      message: error?.message,
-      status: error?.response?.status || null,
-      contentType: error?.response?.headers?.['content-type'] || null,
-      dataPreview,
-      code: error?.code || null
-    });
-  }
-});
-
-app.get('/debug/ml-order-billing/:orderId', async (req, res) => {
-  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
-    return res.status(404).json({ ok: false });
-  }
-
-  try {
-    const data = await mlService.getOrderBillingInfo(req.params.orderId);
-
-    return res.json({
-      ok: true,
-      hasBillingInfo: !!data,
-      keys: data && typeof data === 'object' ? Object.keys(data) : []
-    });
-  } catch (error) {
-    const rawData = error?.response?.data;
-    const dataPreview =
-      typeof rawData === 'string'
-        ? rawData.slice(0, 800)
-        : rawData || null;
-
-    return res.status(500).json({
-      ok: false,
-      step: 'getOrderBillingInfo',
-      message: error?.message,
-      status: error?.response?.status || null,
-      contentType: error?.response?.headers?.['content-type'] || null,
-      dataPreview,
-      code: error?.code || null
-    });
-  }
-});
-
 app.get('/debug/arca-last', async (req, res) => {
   if (process.env.DEBUG_ARCA_CHECKS !== 'true') {
     return res.status(404).json({ ok: false });
@@ -616,46 +633,6 @@ app.get('/debug/arca-last', async (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({ ok: true });
 });
-
-let invoiceWorkerRunning = false;
-
-function startInvoiceWorkerScheduler() {
-  if (process.env.INVOICE_WORKER_ENABLED !== 'true') {
-    console.log('[invoice worker scheduler] Disabled');
-    return;
-  }
-
-  const intervalMs = Number(process.env.INVOICE_WORKER_INTERVAL_MS || 300000);
-
-  console.log('[invoice worker scheduler] Enabled', {
-    intervalMs
-  });
-
-  const runSafely = async () => {
-    if (invoiceWorkerRunning) {
-      console.log('[invoice worker scheduler] Previous run still active. Skipping.');
-      return;
-    }
-
-    invoiceWorkerRunning = true;
-
-    try {
-      await runInvoiceWorker();
-    } catch (error) {
-      console.error('[invoice worker scheduler] Error', {
-        message: error?.message,
-        status: error?.response?.status || null,
-        data: error?.response?.data || null,
-        code: error?.code || null
-      });
-    } finally {
-      invoiceWorkerRunning = false;
-    }
-  };
-
-  setTimeout(runSafely, 10000);
-  setInterval(runSafely, intervalMs);
-}
 
 startInvoiceWorkerScheduler();
 
