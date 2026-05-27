@@ -1218,6 +1218,20 @@ async function getFiscalDocumentsFromPack(packId) {
   return data;
 }
 
+async function getMLAuthenticatedUserDebug() {
+  const { data } = await mlRequest({
+    method: 'GET',
+    url: '/users/me'
+  });
+
+  return {
+    id: data?.id,
+    nickname: data?.nickname,
+    site_id: data?.site_id,
+    status: data?.status
+  };
+}
+
 module.exports = {
   refreshMLToken,
 
@@ -1237,5 +1251,5 @@ module.exports = {
   updateMLStockViaNewModel,
   executeRequest,
   findMLItemBySKU,
-  getMLData
-};
+  getMLData,
+  getMLAuthenticatedUserDebug};
