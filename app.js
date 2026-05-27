@@ -8,6 +8,7 @@ const mercadolibreWebhookRoutes = require('./routes/mercadolibreWebhook.routes')
 const invoiceJobService = require('./invoicing/invoiceJob.service');
 const { runInvoiceWorker } = require('./workers/invoice.worker');
 const arcaWsfeService = require('./invoicing/arcaWsfe.service');
+const mercadolibreInvoiceService = require('./invoicing/mercadolibreInvoice.service');
 
 const app = express();
 
@@ -299,6 +300,118 @@ app.post('/webhooks/tn', async (req, res) => {
     }
   } catch (error) {
     console.error('[TN webhook] Error general:', error.response?.data || error.message || error);
+  }
+});
+
+function checkInvoiceAdminAuth(req, res) {
+  const expectedToken = process.env.INVOICE_ADMIN_TOKEN;
+
+  if (!expectedToken) {
+    res.status(404).json({ ok: false });
+    return false;
+  }
+
+  const receivedToken = req.headers['x-invoice-admin-token'];
+
+  if (receivedToken !== expectedToken) {
+    res.status(403).json({ ok: false, error: 'Forbidden' });
+    return false;
+  }
+
+  return true;
+}
+
+app.post('/admin/invoice-jobs/:jobId/status', async (req, res) => {
+  if (!checkInvoiceAdminAuth(req, res)) {
+    return;
+  }
+
+  try {
+    const { jobId } = req.params;
+    const { status } = req.body || {};
+
+    if (!status) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Missing status'
+      });
+    }
+
+    const job = await invoiceJobService.markStatus(jobId, status);
+
+    return res.json({
+      ok: true,
+      job: {
+        id: job.id,
+        status: job.status,
+        orderId: job.orderId,
+        updatedAt: job.updatedAt
+      }
+    });
+  } catch (error) {
+    console.error('[admin invoice jobs] Error changing status:', {
+      message: error?.message,
+      code: error?.code || null
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: error?.message || 'Could not update job status'
+    });
+  }
+});
+
+app.post('/admin/invoice-jobs/:jobId/process', async (req, res) => {
+  if (!checkInvoiceAdminAuth(req, res)) {
+    return;
+  }
+
+  try {
+    const { jobId } = req.params;
+
+    const job = await invoiceJobService.getJobById(jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Job not found'
+      });
+    }
+
+    await mercadolibreInvoiceService.processInvoiceJob(job);
+
+    const updatedJob = await invoiceJobService.getJobById(jobId);
+
+    return res.json({
+      ok: true,
+      job: {
+        id: updatedJob.id,
+        status: updatedJob.status,
+        orderId: updatedJob.orderId,
+        attempts: updatedJob.attempts || 0,
+        updatedAt: updatedJob.updatedAt,
+        lastError: updatedJob.lastError || null,
+        hasInvoice: !!updatedJob.result?.invoice || !!updatedJob.result?.cae,
+        hasPdf: !!updatedJob.result?.pdf?.filePath || !!updatedJob.result?.pdfFilePath,
+        uploadedToMercadoLibre: !!updatedJob.result?.mercadoLibreUpload?.uploadedAt
+      }
+    });
+  } catch (error) {
+    console.error('[admin invoice jobs] Error processing job:', {
+      message: error?.message,
+      status: error?.response?.status || null,
+      data: error?.response?.data || null,
+      code: error?.code || null,
+      details: error?.details || null
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: error?.message || 'Could not process job',
+      status: error?.response?.status || null,
+      data: error?.response?.data || null,
+      details: error?.details || null
+    });
   }
 });
 
