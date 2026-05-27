@@ -1,5 +1,6 @@
 require('dotenv').config();
 
+const pdfService = require('./invoicing/pdf.service');
 const express = require('express');
 const fs = require('fs/promises');
 const path = require('path');
@@ -794,6 +795,102 @@ app.get('/admin/invoice-jobs/:jobId/pdf', async (req, res) => {
     return res.status(404).json({
       ok: false,
       error: error?.message || 'Invoice PDF not found'
+    });
+  }
+});
+
+app.post('/admin/invoice-jobs/:jobId/regenerate-pdf', async (req, res) => {
+  if (!checkInvoiceAdminAuth(req, res)) {
+    return;
+  }
+
+  try {
+    const { jobId } = req.params;
+    const job = await invoiceJobService.getJobById(jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        ok: false,
+        error: 'Job not found'
+      });
+    }
+
+    const result = job.result || {};
+    const order = result.order;
+
+    const invoice =
+      result.invoice ||
+      (
+        result.cae && result.invoiceNumber
+          ? {
+              environment: process.env.ARCA_ENV || 'production',
+              invoiceType: result.invoiceType || 'C',
+              invoiceTypeCode: result.invoiceTypeCode || 11,
+              pointOfSale: result.pointOfSale,
+              invoiceNumber: result.invoiceNumber,
+              cae: result.cae,
+              caeDueDate: result.caeDueDate,
+              issuedAt: result.issuedAt,
+              currency: result.currency || 'ARS',
+              total: result.total || 0
+            }
+          : null
+      );
+
+    if (!invoice?.cae || !invoice?.invoiceNumber) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Job has no authorized invoice. Refusing to regenerate PDF.'
+      });
+    }
+
+    if (!order) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Job has no persisted order data. Cannot regenerate PDF safely.'
+      });
+    }
+
+    const pdf = await pdfService.createInvoicePdfMock({
+      job,
+      order,
+      invoice
+    });
+
+    const updatedJob = await invoiceJobService.mergeJobResult(job.id, {
+      pdf: {
+        fileName: pdf.fileName,
+        filePath: pdf.filePath,
+        generatedAt: new Date().toISOString()
+      },
+      pdfFileName: pdf.fileName,
+      pdfFilePath: pdf.filePath
+    });
+
+    await invoiceJobService.markStatus(job.id, 'pdf_generated');
+
+    return res.json({
+      ok: true,
+      job: {
+        id: updatedJob.id,
+        status: 'pdf_generated',
+        orderId: updatedJob.orderId,
+        invoiceNumber: invoice.invoiceNumber,
+        pointOfSale: invoice.pointOfSale,
+        cae: invoice.cae,
+        pdfFileName: pdf.fileName,
+        pdfFilePath: pdf.filePath
+      }
+    });
+  } catch (error) {
+    console.error('[admin invoice jobs] Error regenerating PDF:', {
+      message: error?.message,
+      code: error?.code || null
+    });
+
+    return res.status(500).json({
+      ok: false,
+      error: error?.message || 'Could not regenerate PDF'
     });
   }
 });

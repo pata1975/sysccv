@@ -3,7 +3,9 @@ const fsPromises = require('fs/promises');
 const path = require('path');
 const PDFDocument = require('pdfkit');
 
-const INVOICES_DIR = path.join(__dirname, '..', 'data', 'invoices');
+const INVOICES_DIR = process.env.INVOICE_PDF_DIR
+  ? path.resolve(process.env.INVOICE_PDF_DIR)
+  : path.join(__dirname, '..', 'data', 'invoices');
 
 function formatDisplayDate(value) {
   if (!value) return '';
