@@ -1252,4 +1252,5 @@ module.exports = {
   executeRequest,
   findMLItemBySKU,
   getMLData,
-  getMLAuthenticatedUserDebug};
+  getMLAuthenticatedUserDebug
+  };

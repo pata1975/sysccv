@@ -461,6 +461,117 @@ app.get('/debug/ml-order/:orderId', async (req, res) => {
 });
 
 
+app.get('/debug/ml-me', async (req, res) => {
+  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
+    return res.status(404).json({ ok: false });
+  }
+
+  try {
+    const data = await mlService.getMLAuthenticatedUserDebug();
+
+    return res.json({
+      ok: true,
+      user: data
+    });
+  } catch (error) {
+    const rawData = error?.response?.data;
+    const dataPreview =
+      typeof rawData === 'string'
+        ? rawData.slice(0, 500)
+        : rawData || null;
+
+    return res.status(500).json({
+      ok: false,
+      message: error?.message,
+      status: error?.response?.status || null,
+      dataPreview,
+      code: error?.code || null
+    });
+  }
+});
+
+app.get('/debug/ml-order-raw/:orderId', async (req, res) => {
+  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
+    return res.status(404).json({ ok: false });
+  }
+
+  try {
+    const data = await mlService.getOrderById(req.params.orderId);
+
+    return res.json({
+      ok: true,
+      order: {
+        id: data?.id,
+        status: data?.status,
+        pack_id: data?.pack_id || null,
+        seller: data?.seller
+          ? {
+              id: data.seller.id,
+              nickname: data.seller.nickname
+            }
+          : null,
+        buyer: data?.buyer
+          ? {
+              id: data.buyer.id,
+              nickname: data.buyer.nickname
+            }
+          : null,
+        total_amount: data?.total_amount,
+        order_items_count: Array.isArray(data?.order_items)
+          ? data.order_items.length
+          : 0
+      }
+    });
+  } catch (error) {
+    const rawData = error?.response?.data;
+    const dataPreview =
+      typeof rawData === 'string'
+        ? rawData.slice(0, 800)
+        : rawData || null;
+
+    return res.status(500).json({
+      ok: false,
+      step: 'getOrderById',
+      message: error?.message,
+      status: error?.response?.status || null,
+      contentType: error?.response?.headers?.['content-type'] || null,
+      dataPreview,
+      code: error?.code || null
+    });
+  }
+});
+
+app.get('/debug/ml-order-billing/:orderId', async (req, res) => {
+  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
+    return res.status(404).json({ ok: false });
+  }
+
+  try {
+    const data = await mlService.getOrderBillingInfo(req.params.orderId);
+
+    return res.json({
+      ok: true,
+      hasBillingInfo: !!data,
+      keys: data && typeof data === 'object' ? Object.keys(data) : []
+    });
+  } catch (error) {
+    const rawData = error?.response?.data;
+    const dataPreview =
+      typeof rawData === 'string'
+        ? rawData.slice(0, 800)
+        : rawData || null;
+
+    return res.status(500).json({
+      ok: false,
+      step: 'getOrderBillingInfo',
+      message: error?.message,
+      status: error?.response?.status || null,
+      contentType: error?.response?.headers?.['content-type'] || null,
+      dataPreview,
+      code: error?.code || null
+    });
+  }
+});
 
 app.get('/debug/arca-last', async (req, res) => {
   if (process.env.DEBUG_ARCA_CHECKS !== 'true') {
