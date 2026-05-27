@@ -415,6 +415,51 @@ app.post('/admin/invoice-jobs/:jobId/process', async (req, res) => {
   }
 });
 
+app.get('/debug/ml-order/:orderId', async (req, res) => {
+  if (process.env.DEBUG_INVOICE_JOBS !== 'true') {
+    return res.status(404).json({ ok: false });
+  }
+
+  try {
+    const order = await mlService.getOrderForInvoice(req.params.orderId);
+
+    return res.json({
+      ok: true,
+      order: {
+        orderId: order.orderId,
+        packId: order.packId,
+        status: order.status,
+        buyerName: order.buyerName,
+        total: order.total,
+        currency: order.currency,
+        itemsCount: Array.isArray(order.items) ? order.items.length : 0,
+        hasBillingInfo: !!order.billingInfo
+      }
+    });
+  } catch (error) {
+    const rawData = error?.response?.data;
+    const dataPreview =
+      typeof rawData === 'string'
+        ? rawData.slice(0, 500)
+        : rawData || null;
+
+    console.error('[debug ml order] Error:', {
+      message: error?.message,
+      status: error?.response?.status || null,
+      dataPreview,
+      code: error?.code || null
+    });
+
+    return res.status(500).json({
+      ok: false,
+      message: error?.message,
+      status: error?.response?.status || null,
+      dataPreview,
+      code: error?.code || null
+    });
+  }
+});
+
 app.get('/debug/arca-last', async (req, res) => {
   if (process.env.DEBUG_ARCA_CHECKS !== 'true') {
     return res.status(404).json({ ok: false });
