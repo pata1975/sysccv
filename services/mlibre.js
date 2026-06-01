@@ -979,6 +979,8 @@ async function updateVariationStock(itemId, variationId, newStock) {
     url: `/items/${itemId}`,
     data: payload,
   });
+
+  return true;
 }
 
 async function updateItemStock(itemId, newStock) {
@@ -987,6 +989,8 @@ async function updateItemStock(itemId, newStock) {
     url: `/items/${itemId}`,
     data: { available_quantity: toInt(newStock, 0) },
   });
+
+  return true;
 }
 
 async function updateUserProductStockTarget(userProductId, stockResponse, target, newStock) {
@@ -1015,6 +1019,8 @@ async function updateUserProductStockTarget(userProductId, stockResponse, target
     },
     data: payload,
   });
+
+  return true;
 }
 
 async function updateMLStockViaNewModel(target, newStock) {
@@ -1150,6 +1156,10 @@ async function findMLItemBySKU(rawSku) {
   return match?.itemId || null;
 }
 
+async function findMLStockTargetBySKU(rawSku) {
+  return findMLPublicationBySKU(rawSku);
+}
+
 async function getMLData(id) {
   if (!id) return null;
 
@@ -1251,6 +1261,7 @@ module.exports = {
   updateMLStockViaNewModel,
   executeRequest,
   findMLItemBySKU,
+  findMLStockTargetBySKU,
   getMLData,
   getMLAuthenticatedUserDebug
   };

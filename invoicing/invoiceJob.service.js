@@ -120,12 +120,18 @@ async function getJobById(jobId) {
 function getRunnableStatuses() {
   const statuses = [
     'pending',
-    'arca_failed',
     'arca_authorized',
     'pdf_failed',
     'upload_pending',
     'upload_failed'
   ];
+
+  // En producción es más seguro no reintentar ARCA automáticamente.
+  // Si necesitás reintentar jobs en arca_failed, hacelo manualmente por endpoint admin
+  // o activá explícitamente INVOICE_RETRY_ARCA_FAILED=true.
+  if (process.env.INVOICE_RETRY_ARCA_FAILED === 'true') {
+    statuses.push('arca_failed');
+  }
 
   if (process.env.ML_UPLOAD_INVOICE_TO_ML === 'true') {
     statuses.push('pdf_generated');
