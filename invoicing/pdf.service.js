@@ -256,7 +256,7 @@ function drawHeader(doc, { invoice, business }) {
     fontSize: 11
   });
 
-  labelValue(doc, 'Raz髇 Social:', business.legalName, x + 10, y + 72, x + 78, {
+  labelValue(doc, 'Razon Social:', business.legalName, x + 10, y + 72, x + 78, {
     width: leftW + centerW - 88
   });
 
@@ -285,7 +285,7 @@ function drawHeader(doc, { invoice, business }) {
     fontSize: 8
   });
 
-  labelValue(doc, 'Fecha de Emisi髇:', formatDisplayDate(invoice.issuedAt), rightX, y + 84, rightX + 92, {
+  labelValue(doc, 'Fecha de Emision:', formatDisplayDate(invoice.issuedAt), rightX, y + 84, rightX + 92, {
     width: 120,
     fontSize: 8
   });
@@ -318,10 +318,10 @@ function drawBuyerBox(doc, { order }) {
   doc.font('Helvetica-Bold').fontSize(8.5).text(`${docType}:`, x + 8, y + 9, { continued: true });
   doc.font('Helvetica').text(` ${docNumber}`);
 
-  labelValue(doc, 'Apellido y Nombre / Raz贸n Social:', order.buyerName || 'Consumidor Final', x + 205, y + 9, x + 370, { width: 170 });
-  labelValue(doc, 'Condici贸n frente al IVA:', order.buyerTaxpayerType || 'Consumidor Final', x + 8, y + 34, x + 120, { width: 190 });
+  labelValue(doc, 'Apellido y Nombre / Razon Social:', order.buyerName || 'Consumidor Final', x + 205, y + 9, x + 370, { width: 170 });
+  labelValue(doc, 'Condicion frente al IVA:', order.buyerTaxpayerType || 'Consumidor Final', x + 8, y + 34, x + 120, { width: 190 });
   labelValue(doc, 'Domicilio:', buildAddressLine(order.buyerAddress), x + 315, y + 34, x + 370, { width: 170 });
-  labelValue(doc, 'Condici贸n de venta:', process.env.INVOICE_SALES_CONDITION || 'Otros medios de pago electr贸nico', x + 8, y + 56, x + 110, { width: 250 });
+  labelValue(doc, 'Condicion de venta:', process.env.INVOICE_SALES_CONDITION || 'Otros medios de pago electr髇ico', x + 8, y + 56, x + 110, { width: 250 });
 }
 
 function drawItemsTable(doc, { order }) {
@@ -329,25 +329,45 @@ function drawItemsTable(doc, { order }) {
   const y = 265;
   const w = PAGE.width - PAGE.margin * 2;
   const headerH = 20;
-  const columns = [
-    { label: 'C贸digo', x, width: 40, align: 'center' },
-    { label: 'Producto / Servicio', x: x + 40, width: 150, align: 'left' },
-    { label: 'Cantidad', x: x + 190, width: 62, align: 'center' },
-    { label: 'U. Medida', x: x + 252, width: 50, align: 'center' },
-    { label: 'Precio Unit.', x: x + 302, width: 78, align: 'right' },
-    { label: '% Bonif', x: x + 380, width: 52, align: 'right' },
-    { label: 'Imp. Bonif.', x: x + 432, width: 70, align: 'right' },
-    { label: 'Subtotal', x: x + 502, width: w - 502, align: 'right' }
+
+  const baseColumns = [
+    { key: 'code', label: 'Codigo', width: 38, align: 'center' },
+    { key: 'title', label: 'Producto / Servicio', width: 160, align: 'left' },
+    { key: 'quantity', label: 'Cantidad', width: 50, align: 'right' },
+    { key: 'unit', label: 'U. Medida', width: 45, align: 'center' },
+    { key: 'unitPrice', label: 'Precio Unit.', width: 70, align: 'right' },
+    { key: 'discountPercent', label: '% Bonif', width: 38, align: 'right' },
+    { key: 'discountAmount', label: 'Imp. Bonif.', width: 50, align: 'right' },
+    { key: 'subtotal', label: 'Subtotal', width: w - 451, align: 'right' }
   ];
 
+  let currentX = x;
+
+  const columns = baseColumns.map((col) => {
+    const column = {
+      ...col,
+      x: currentX
+    };
+
+    currentX += col.width;
+
+    return column;
+  });
+
   drawBox(doc, x, y, w, headerH, '#d9d9d9');
+
   columns.forEach((col) => {
     doc.moveTo(col.x, y).lineTo(col.x, y + headerH).stroke();
-    doc.font('Helvetica-Bold').fontSize(7.5).text(col.label, col.x + 4, y + 6, {
-      width: col.width - 8,
-      align: col.align
-    });
+
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(7)
+      .text(col.label, col.x + 3, y + 6, {
+        width: col.width - 6,
+        align: col.align
+      });
   });
+
   doc.moveTo(x + w, y).lineTo(x + w, y + headerH).stroke();
 
   const items = Array.isArray(order.items) && order.items.length
@@ -363,14 +383,26 @@ function drawItemsTable(doc, { order }) {
     const title = cleanText(item.title || item.description || 'Producto / Servicio');
 
     doc.font('Helvetica').fontSize(8);
-    doc.text('', x + 4, rowY, { width: 34 });
-    doc.text(title, x + 44, rowY, { width: 145, height: 34, ellipsis: true });
-    doc.text(formatMoney(quantity), x + 194, rowY, { width: 54, align: 'right' });
-    doc.text('unidades', x + 256, rowY, { width: 42, align: 'center' });
-    doc.text(formatMoney(unitPrice), x + 306, rowY, { width: 70, align: 'right' });
-    doc.text('0,00', x + 384, rowY, { width: 44, align: 'right' });
-    doc.text('0,00', x + 436, rowY, { width: 62, align: 'right' });
-    doc.text(formatMoney(subtotal), x + 506, rowY, { width: w - 510, align: 'right' });
+
+    columns.forEach((col) => {
+      let value = '';
+
+      if (col.key === 'code') value = '';
+      if (col.key === 'title') value = title;
+      if (col.key === 'quantity') value = formatMoney(quantity);
+      if (col.key === 'unit') value = 'unidades';
+      if (col.key === 'unitPrice') value = formatMoney(unitPrice);
+      if (col.key === 'discountPercent') value = '0,00';
+      if (col.key === 'discountAmount') value = '0,00';
+      if (col.key === 'subtotal') value = formatMoney(subtotal);
+
+      doc.text(value, col.x + 3, rowY, {
+        width: col.width - 6,
+        height: col.key === 'title' ? 34 : undefined,
+        align: col.align,
+        ellipsis: col.key === 'title'
+      });
+    });
 
     rowY += 38;
   });
