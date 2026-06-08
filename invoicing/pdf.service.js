@@ -232,37 +232,78 @@ function drawHeader(doc, { invoice, business }) {
   const y = 28;
   const w = PAGE.width - PAGE.margin * 2;
   const h = 148;
-  const leftW = 292;
+
+  const leftW = 250;
   const centerW = 50;
   const rightW = w - leftW - centerW;
 
+  const centerX = x + leftW;
+  const rightStartX = x + leftW + centerW;
+
   drawCentered(doc, 'ORIGINAL', x, y - 20, w, { fontSize: 15 });
+
   drawBox(doc, x, y, w, h);
-  doc.moveTo(x + leftW, y).lineTo(x + leftW, y + h).stroke();
-  doc.moveTo(x + leftW + centerW, y).lineTo(x + leftW + centerW, y + 50).stroke();
-  doc.moveTo(x + leftW + centerW, y + 50).lineTo(x + leftW + centerW, y + h).stroke();
 
-  drawCentered(doc, business.displayName, x + 10, y + 26, leftW - 20, { fontSize: 11 });
-  labelValue(doc, 'RazÃ³n Social:', business.legalName, x + 10, y + 72, x + 78, { width: leftW - 88 });
-  labelValue(doc, 'Domicilio Comercial:', business.address, x + 10, y + 100, x + 106, { width: leftW - 116 });
-  labelValue(doc, 'CondiciÃ³n frente al IVA:', business.taxCondition, x + 10, y + 128, x + 122, { width: leftW - 132 });
+  // Separador entre bloque izquierdo/C y bloque derecho.
+  doc.moveTo(rightStartX, y).lineTo(rightStartX, y + h).stroke();
 
-  drawBox(doc, x + leftW, y, centerW, 50);
-  drawCentered(doc, 'C', x + leftW, y + 7, centerW, { fontSize: 28 });
-  drawCentered(doc, 'COD. 011', x + leftW, y + 35, centerW, { fontSize: 7.5 });
+  // Caja de la letra C solamente arriba. No dibujamos rectángulo vacío debajo.
+  drawBox(doc, centerX, y, centerW, 50);
+  drawCentered(doc, 'C', centerX, y + 7, centerW, { fontSize: 28 });
+  drawCentered(doc, 'COD. 011', centerX, y + 35, centerW, { fontSize: 7.5 });
 
-  doc.font('Helvetica-Bold').fontSize(20).text('FACTURA', x + leftW + centerW + 20, y + 18, {
-    width: rightW - 40,
+  drawCentered(doc, business.displayName, x + 10, y + 26, leftW - 20, {
+    fontSize: 11
+  });
+
+  labelValue(doc, 'Razón Social:', business.legalName, x + 10, y + 72, x + 78, {
+    width: leftW + centerW - 88
+  });
+
+  labelValue(doc, 'Domicilio Comercial:', business.address, x + 10, y + 100, x + 106, {
+    width: leftW + centerW - 116
+  });
+
+  labelValue(doc, 'Condición frente al IVA:', business.taxCondition, x + 10, y + 128, x + 122, {
+    width: leftW + centerW - 132
+  });
+
+  doc.font('Helvetica-Bold').fontSize(20).text('FACTURA', rightStartX + 12, y + 18, {
+    width: rightW - 24,
     align: 'center'
   });
 
-  const rightX = x + leftW + centerW + 18;
-  labelValue(doc, 'Punto de Venta:', padNumber(invoice.pointOfSale, 5), rightX, y + 62, rightX + 80, { width: 52 });
-  labelValue(doc, 'Comp. Nro:', padNumber(invoice.invoiceNumber, 8), rightX + 148, y + 62, rightX + 205, { width: 70 });
-  labelValue(doc, 'Fecha de EmisiÃ³n:', formatDisplayDate(invoice.issuedAt), rightX, y + 84, rightX + 92, { width: 120 });
-  labelValue(doc, 'CUIT:', business.cuit, rightX, y + 108, rightX + 32, { width: 120 });
-  labelValue(doc, 'Ingresos Brutos:', business.grossIncome, rightX, y + 124, rightX + 84, { width: 120 });
-  labelValue(doc, 'Fecha de Inicio de Actividades:', business.activityStartDate, rightX, y + 140, rightX + 150, { width: 120 });
+  const rightX = rightStartX + 12;
+
+  labelValue(doc, 'Punto de Venta:', padNumber(invoice.pointOfSale, 5), rightX, y + 62, rightX + 72, {
+    width: 42,
+    fontSize: 8
+  });
+
+  labelValue(doc, 'Comp. Nro:', padNumber(invoice.invoiceNumber, 8), rightX + 122, y + 62, rightX + 178, {
+    width: 50,
+    fontSize: 8
+  });
+
+  labelValue(doc, 'Fecha de Emisión:', formatDisplayDate(invoice.issuedAt), rightX, y + 84, rightX + 92, {
+    width: 120,
+    fontSize: 8
+  });
+
+  labelValue(doc, 'CUIT:', business.cuit, rightX, y + 108, rightX + 32, {
+    width: 120,
+    fontSize: 8
+  });
+
+  labelValue(doc, 'Ingresos Brutos:', business.grossIncome, rightX, y + 124, rightX + 84, {
+    width: 120,
+    fontSize: 8
+  });
+
+  labelValue(doc, 'Fecha de Inicio de Actividades:', business.activityStartDate, rightX, y + 140, rightX + 144, {
+    width: 85,
+    fontSize: 8
+  });
 }
 
 function drawBuyerBox(doc, { order }) {
