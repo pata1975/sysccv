@@ -87,7 +87,10 @@ function summarizeJob(job) {
   return {
     id: job.id,
     status: job.status,
+    sourceType: job.sourceType || job.result?.sourceType || null,
     orderId: job.orderId,
+    orderIds: job.result?.orderIds || job.result?.order?.orderIds || [],
+    packId: job.packId || job.result?.packId || job.result?.order?.packId || null,
     attempts: job.attempts || 0,
     createdAt: job.createdAt || null,
     updatedAt: job.updatedAt || null,
@@ -359,6 +362,42 @@ app.get('/debug/ml-order-raw/:orderId', async (req, res) => {
     return res.status(500).json({
       ok: false,
       step: 'getOrderById',
+      message: error?.message,
+      status: error?.response?.status || null,
+      contentType: error?.response?.headers?.['content-type'] || null,
+      dataPreview: getErrorPreview(error, 1000),
+      code: error?.code || null
+    });
+  }
+});
+
+app.get('/debug/ml-pack-raw/:packId', async (req, res) => {
+  if (!requireDebug(req, res)) return;
+
+  try {
+    const pack = await mlService.getPackById(req.params.packId);
+    const rawOrders = pack?.orders || pack?.order_ids || pack?.orders_ids || [];
+    const orderIds = Array.isArray(rawOrders)
+      ? rawOrders
+          .map((entry) => {
+            if (typeof entry === 'string' || typeof entry === 'number') return String(entry);
+            return String(entry?.id || entry?.order_id || entry?.orderId || '');
+          })
+          .filter(Boolean)
+      : [];
+
+    return res.json({
+      ok: true,
+      pack: {
+        id: pack?.id || req.params.packId,
+        orders_count: orderIds.length,
+        orderIds
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      step: 'getPackById',
       message: error?.message,
       status: error?.response?.status || null,
       contentType: error?.response?.headers?.['content-type'] || null,

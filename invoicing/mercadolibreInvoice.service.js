@@ -10,8 +10,10 @@ function sanitizeOrderForPersistence(order) {
   }
 
   return {
-    orderId: order.orderId,
+    orderId: order.orderId || null,
+    orderIds: Array.isArray(order.orderIds) ? order.orderIds : [],
     packId: order.packId || null,
+    sourceType: order.sourceType || (order.packId ? 'pack' : 'order'),
     status: order.status || null,
     dateCreated: order.dateCreated || null,
     dateClosed: order.dateClosed || null,
@@ -106,12 +108,65 @@ function shouldBlockMercadoLibreUpload(invoice) {
 
 function resolveUploadTargetId(result) {
   return (
+    result?.mercadoLibreUploadTargetId ||
     result?.order?.packId ||
     result?.packId ||
     result?.order?.orderId ||
     result?.orderId ||
     null
   );
+}
+
+function isPackJob(job) {
+  const jobId = job?.id || '';
+
+  return (
+    job?.sourceType === 'pack' ||
+    jobId.startsWith('ml-pack-') ||
+    !!job?.packId
+  );
+}
+
+function shouldDelayPackJob(job) {
+  if (!isPackJob(job)) {
+    return false;
+  }
+
+  const delayMs = Number(process.env.ML_PACK_INVOICE_DELAY_MS || 90000);
+
+  if (!Number.isFinite(delayMs) || delayMs <= 0) {
+    return false;
+  }
+
+  const createdAtMs = new Date(job?.createdAt || Date.now()).getTime();
+
+  if (!Number.isFinite(createdAtMs)) {
+    return false;
+  }
+
+  return Date.now() - createdAtMs < delayMs;
+}
+
+async function getInvoiceSourceForJob(job) {
+  const jobId = job?.id || '';
+
+  if (isPackJob(job)) {
+    const packId = job.packId || jobId.replace('ml-pack-', '');
+
+    if (!packId || packId === jobId) {
+      throw new Error(`No se pudo determinar packId para facturar el job ${jobId}`);
+    }
+
+    return mlibreService.getPackForInvoice(packId);
+  }
+
+  const orderId = job.orderId || jobId.replace('ml-order-', '');
+
+  if (!orderId || orderId === jobId) {
+    throw new Error(`No se pudo determinar orderId para facturar el job ${jobId}`);
+  }
+
+  return mlibreService.getOrderForInvoice(orderId);
 }
 
 async function ensureArcaAuthorized(job) {
@@ -128,7 +183,7 @@ async function ensureArcaAuthorized(job) {
   try {
     await invoiceJobService.markStatus(job.id, 'arca_authorizing');
 
-    const order = await mlibreService.getOrderForInvoice(job.orderId);
+    const order = await getInvoiceSourceForJob(job);
     const sanitizedOrder = sanitizeOrderForPersistence(order);
     const fiscalInvoice = invoiceFiscalService.buildArcaInvoiceRequestFromOrder(order);
 
@@ -144,7 +199,11 @@ async function ensureArcaAuthorized(job) {
       invoice,
 
       orderId: sanitizedOrder.orderId,
+      orderIds: sanitizedOrder.orderIds,
       packId: sanitizedOrder.packId,
+      sourceType: sanitizedOrder.sourceType,
+      mercadoLibreUploadTargetId:
+        job.mercadoLibreUploadTargetId || sanitizedOrder.packId || sanitizedOrder.orderId,
       status: sanitizedOrder.status,
       buyerName: sanitizedOrder.buyerName,
       total: sanitizedOrder.total,
@@ -283,6 +342,17 @@ async function ensureUploadedToMercadoLibre(job) {
 async function processInvoiceJob(job) {
   if (job.source !== 'mercadolibre') {
     throw new Error(`Unsupported invoice source: ${job.source}`);
+  }
+
+  if (shouldDelayPackJob(job)) {
+    console.log('[invoice worker] Pack job demorado para esperar todas las orders del pack.', {
+      jobId: job.id,
+      packId: job.packId || null,
+      createdAt: job.createdAt || null,
+      delayMs: Number(process.env.ML_PACK_INVOICE_DELAY_MS || 90000)
+    });
+
+    return job.result;
   }
 
   await invoiceJobService.incrementAttempts(job.id);

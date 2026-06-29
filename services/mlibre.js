@@ -530,6 +530,173 @@ async function getOrderForInvoice(orderId) {
   return normalizeMercadoLibreOrderForInvoice(order, billingInfo);
 }
 
+
+async function getPackById(packId) {
+  if (!packId) {
+    throw new Error('No se recibió packId para getPackById');
+  }
+
+  const { data } = await mlRequest({
+    method: 'GET',
+    url: `/packs/${packId}`
+  });
+
+  return data;
+}
+
+function extractOrderIdsFromPack(pack) {
+  const rawOrders =
+    pack?.orders ||
+    pack?.order_ids ||
+    pack?.orders_ids ||
+    [];
+
+  const ids = rawOrders
+    .map((entry) => {
+      if (typeof entry === 'string' || typeof entry === 'number') {
+        return String(entry);
+      }
+
+      return String(entry?.id || entry?.order_id || entry?.orderId || '');
+    })
+    .filter(Boolean);
+
+  return [...new Set(ids)];
+}
+
+function normalizeMercadoLibrePackForInvoice(packId, orders, billingInfo = null) {
+  const safeOrders = Array.isArray(orders) ? orders.filter(Boolean) : [];
+  const firstOrder = safeOrders[0] || {};
+  const parsedBillingInfo = parseBillingInfo(billingInfo);
+
+  const items = safeOrders.flatMap((order) => {
+    if (!Array.isArray(order?.order_items)) {
+      return [];
+    }
+
+    return order.order_items.map((orderItem) => ({
+      ...normalizeOrderItemForInvoice(orderItem),
+      orderId: order?.id ? String(order.id) : null,
+      packId: String(packId)
+    }));
+  });
+
+  const totalFromItems = items.reduce((acc, item) => acc + Number(item.total || 0), 0);
+
+  const totalFromOrders = safeOrders.reduce(
+    (acc, order) => acc + Number(order?.total_amount || 0),
+    0
+  );
+
+  const paidAmountFromOrders = safeOrders.reduce(
+    (acc, order) => acc + Number(order?.paid_amount || 0),
+    0
+  );
+
+  return {
+    orderId: null,
+    orderIds: safeOrders
+      .map((order) => order?.id ? String(order.id) : null)
+      .filter(Boolean),
+
+    packId: String(packId),
+    status: firstOrder?.status || null,
+    dateCreated: firstOrder?.date_created || null,
+    dateClosed: firstOrder?.date_closed || null,
+    currency: firstOrder?.currency_id || 'ARS',
+
+    total: Number(totalFromOrders || totalFromItems || 0),
+    paidAmount: Number(paidAmountFromOrders || 0),
+
+    buyerName:
+      parsedBillingInfo.fullName ||
+      [firstOrder?.buyer?.first_name, firstOrder?.buyer?.last_name]
+        .filter(Boolean)
+        .join(' ') ||
+      'Consumidor final',
+
+    buyerDocumentType: parsedBillingInfo.documentType,
+    buyerDocumentNumber: parsedBillingInfo.documentNumber,
+    buyerTaxTypeCode: parsedBillingInfo.taxTypeCode,
+    buyerTaxpayerType: parsedBillingInfo.taxpayerType,
+    buyerTaxContributor: parsedBillingInfo.taxContributor,
+
+    buyerAddress: {
+      streetName: parsedBillingInfo.streetName,
+      streetNumber: parsedBillingInfo.streetNumber,
+      city: parsedBillingInfo.city,
+      stateCode: parsedBillingInfo.stateCode,
+      stateName: parsedBillingInfo.stateName,
+      zipCode: parsedBillingInfo.zipCode,
+      countryId: parsedBillingInfo.countryId,
+      comment: parsedBillingInfo.comment
+    },
+
+    buyerId: firstOrder?.buyer?.id || null,
+    buyerNickname: firstOrder?.buyer?.nickname || null,
+
+    billingInfo,
+    parsedBillingInfo,
+    items,
+
+    raw: {
+      packId: String(packId),
+      orders: safeOrders
+    }
+  };
+}
+
+async function getPackForInvoice(packId) {
+  const pack = await getPackById(packId);
+  const orderIds = extractOrderIdsFromPack(pack);
+
+  if (!orderIds.length) {
+    const err = new Error(`El pack ${packId} no tiene orders asociadas`);
+    err.pack = pack;
+    throw err;
+  }
+
+  const orders = await Promise.all(
+    orderIds.map((orderId) => getOrderById(orderId))
+  );
+
+  let billingInfo = null;
+
+  try {
+    billingInfo = await getOrderBillingInfo(orderIds[0]);
+  } catch (error) {
+    console.warn('[ML invoice] No se pudo obtener billing_info del pack.', {
+      packId,
+      orderId: orderIds[0],
+      message: error?.response?.data || error?.message || error
+    });
+  }
+
+  return normalizeMercadoLibrePackForInvoice(packId, orders, billingInfo);
+}
+
+async function resolveInvoiceTargetFromOrderId(orderId) {
+  const order = await getOrderById(orderId);
+
+  if (order?.pack_id) {
+    return {
+      sourceType: 'pack',
+      jobId: `ml-pack-${order.pack_id}`,
+      orderId: String(order.id),
+      packId: String(order.pack_id),
+      mercadoLibreUploadTargetId: String(order.pack_id)
+    };
+  }
+
+  return {
+    sourceType: 'order',
+    jobId: `ml-order-${order.id}`,
+    orderId: String(order.id),
+    packId: null,
+    mercadoLibreUploadTargetId: String(order.id)
+  };
+}
+
 function parseBillingInfo(billingInfo) {
   const additionalInfo =
     billingInfo?.billing_info?.additional_info ||
@@ -1248,6 +1415,9 @@ module.exports = {
   getOrderById,
   getOrderBillingInfo,
   getOrderForInvoice,
+  getPackById,
+  getPackForInvoice,
+  resolveInvoiceTargetFromOrderId,
 
   uploadFiscalDocumentToPack,
   getFiscalDocumentsFromPack,

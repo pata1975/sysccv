@@ -59,7 +59,7 @@ function extractMercadoLibreOrderId(payload) {
   return null;
 }
 
-function buildJobId({ source, payload }) {
+function buildFallbackJobId({ source, payload }) {
   const orderId = extractMercadoLibreOrderId(payload);
 
   if (source === 'mercadolibre' && orderId) {
@@ -75,11 +75,42 @@ function buildJobId({ source, payload }) {
   return `${source}-${hash}`;
 }
 
+async function resolveJobTarget({ source, payload }) {
+  const orderId = extractMercadoLibreOrderId(payload);
+
+  if (source === 'mercadolibre' && orderId) {
+    const mlibreService = require('../services/mlibre');
+    const target = await mlibreService.resolveInvoiceTargetFromOrderId(orderId);
+
+    return {
+      id: target.jobId,
+      orderId: target.orderId || orderId,
+      packId: target.packId || null,
+      sourceType: target.sourceType || 'order',
+      mercadoLibreUploadTargetId:
+        target.mercadoLibreUploadTargetId || target.packId || target.orderId || orderId,
+      payload: {
+        ...payload,
+        invoiceTarget: target
+      }
+    };
+  }
+
+  return {
+    id: buildFallbackJobId({ source, payload }),
+    orderId,
+    packId: null,
+    sourceType: null,
+    mercadoLibreUploadTargetId: orderId,
+    payload
+  };
+}
+
 async function createPendingJob({ source, payload }) {
   const jobs = await readJobs();
 
-  const id = buildJobId({ source, payload });
-  const existingJob = jobs.find((job) => job.id === id);
+  const target = await resolveJobTarget({ source, payload });
+  const existingJob = jobs.find((job) => job.id === target.id);
 
   if (existingJob) {
     return {
@@ -91,11 +122,14 @@ async function createPendingJob({ source, payload }) {
   const now = new Date().toISOString();
 
   const job = {
-    id,
+    id: target.id,
     source,
+    sourceType: target.sourceType,
     status: 'pending',
-    orderId: extractMercadoLibreOrderId(payload),
-    payload,
+    orderId: target.orderId,
+    packId: target.packId,
+    mercadoLibreUploadTargetId: target.mercadoLibreUploadTargetId,
+    payload: target.payload,
     attempts: 0,
     createdAt: now,
     updatedAt: now,
