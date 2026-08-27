@@ -4,6 +4,17 @@ const pdfService = require('./pdf.service');
 const invoiceFiscalService = require('./invoiceFiscal.service');
 const invoiceJobService = require('./invoiceJob.service');
 
+function isMercadoLibreFileAlreadyExistsError(error) {
+  const status = error?.response?.status;
+  const data = error?.response?.data || {};
+  const message = String(data?.message || error?.message || '');
+
+  return (
+    status === 409 &&
+    /file already exists for the pack/i.test(message)
+  );
+}
+
 function sanitizeOrderForPersistence(order) {
   if (!order) {
     return null;
@@ -304,6 +315,8 @@ async function ensureUploadedToMercadoLibre(job) {
     return job;
   }
 
+  let targetId = null;
+
   try {
     await invoiceJobService.markStatus(job.id, 'upload_pending');
 
@@ -313,7 +326,7 @@ async function ensureUploadedToMercadoLibre(job) {
       throw new Error(`El job ${job.id} no tiene PDF para subir a MercadoLibre`);
     }
 
-    const targetId = resolveUploadTargetId(result);
+    targetId = resolveUploadTargetId(result);
 
     if (!targetId) {
       throw new Error(`No se pudo determinar packId/orderId para subir factura del job ${job.id}`);
@@ -334,6 +347,20 @@ async function ensureUploadedToMercadoLibre(job) {
 
     return invoiceJobService.markStatus(updatedJob.id, 'uploaded_to_ml');
   } catch (error) {
+    if (isMercadoLibreFileAlreadyExistsError(error)) {
+      const updatedJob = await invoiceJobService.mergeJobResult(job.id, {
+        mercadoLibreUpload: {
+          targetId: targetId || resolveUploadTargetId(result),
+          uploadedAt: new Date().toISOString(),
+          alreadyExisted: true,
+          response: error?.response?.data || null
+        },
+        uploadAlreadyExistedAt: new Date().toISOString()
+      });
+
+      return invoiceJobService.markStatus(updatedJob.id, 'uploaded_to_ml');
+    }
+
     await invoiceJobService.markStageFailed(job.id, 'upload_failed', error);
     throw error;
   }
